@@ -1,0 +1,572 @@
+#include <amxmodx>
+#include <amxmisc>
+#include <fakemeta>
+#include <engine>
+#include <hamsandwich>
+
+
+//Boolean of when NPC spawned 
+new bool: g_NpcSpawn[256]; 
+//Boolean to check if NPC is alive or not 
+new bool: g_NpcDead[256]; 
+//Classname for our NPC 
+new const g_NpcClassName[] = "ent_npc"; 
+//Constant model for NPC 
+new const g_NpcModel[] = "models/barney.mdl"; 
+
+//List of sounds our NPC will emit when damaged 
+new const g_NpcSoundPain[][] =  
+{ 
+    "barney/ba_pain1.wav", 
+    "barney/ba_pain2.wav", 
+    "barney/ba_pain3.wav" 
+} 
+
+//Sounds when killed 
+new const g_NpcSoundDeath[][] = 
+{ 
+    "barney/ba_die1.wav", 
+    "barney/ba_die2.wav", 
+    "barney/ba_die3.wav" 
+} 
+
+//Sounds when we knife our flesh NPC
+new const g_NpcSoundKnifeHit[][] = 
+{
+	"weapons/knife_hit1.wav",
+	"weapons/knife_hit2.wav",
+	"weapons/knife_hit3.wav",
+	"weapons/knife_hit4.wav"
+}
+
+new const g_NpcSoundKnifeStab[] = "weapons/knife_stab.wav";
+
+//List of idle animations 
+new const NPC_IdleAnimations[] = { 0, 1, 2, 3, 11, 12, 18, 21, 39, 63, 65 };
+
+//Sprites for blood when our NPC is damaged
+new spr_blood_drop, spr_blood_spray
+
+//Player cooldown for using our NPC 
+new Float: g_Cooldown[32];
+
+//Boolean to check if we knifed our NPC
+new bool: g_Hit[32];
+
+public plugin_init()
+{
+	register_plugin("NPC Plugin", "1.1", "Mazza");
+	register_clcmd("say /npc", "ClCmd_NPC");
+	
+	register_event("HLTV", "Event_NewRound", "a", "1=0", "2=0");
+		
+	RegisterHam(Ham_TakeDamage, "info_target", "npc_TakeDamage");
+	RegisterHam(Ham_Killed, "info_target", "npc_Killed");
+	RegisterHam(Ham_Think, "info_target", "npc_Think");
+	RegisterHam(Ham_TraceAttack, "info_target", "npc_TraceAttack");
+	RegisterHam(Ham_ObjectCaps, "player", "npc_ObjectCaps", 1 );
+	
+	register_forward(FM_EmitSound, "npc_EmitSound"); 
+}
+
+public plugin_precache()
+{
+	spr_blood_drop = precache_model("sprites/blood.spr")
+	spr_blood_spray = precache_model("sprites/bloodspray.spr")
+	
+	new i;
+	for(i = 0 ; i < sizeof g_NpcSoundPain ; i++)
+		precache_sound(g_NpcSoundPain[i]);
+	for(i = 0 ; i < sizeof g_NpcSoundDeath ; i++)
+		precache_sound(g_NpcSoundDeath[i]);
+
+	precache_model(g_NpcModel)
+}
+
+public plugin_cfg()
+{
+	Load_Npc()
+}
+
+public ClCmd_NPC(id)
+{
+	//Create a new menu
+	new menu = menu_create("NPC: Main Menu", "Menu_Handler");
+	
+	//Add some items to the newly created menu
+	menu_additem(menu, "Create NPC", "1");
+	menu_additem(menu, "Delete NPC", "2");
+	menu_additem(menu, "Save current NPC locations", "3");
+	menu_additem(menu, "Delete all NPC", "4");
+	
+	//Let the menu have an 'Exit' option
+	menu_setprop(menu, MPROP_EXIT, MEXIT_ALL);
+	
+	//Display our menu
+	menu_display(id, menu);
+}
+
+public Menu_Handler(id, menu, item)
+{
+	//If user chose to exit menu we will destroy our menu
+	if(item == MENU_EXIT)
+	{
+		menu_destroy(menu);
+		return PLUGIN_HANDLED;
+	}
+	
+	new info[6], szName[64];
+	new access, callback;
+	
+	menu_item_getinfo(menu, item, access, info, charsmax(info), szName, charsmax(szName), callback);
+	
+	new key = str_to_num(info);
+	
+	switch(key)
+	{
+		case 1:
+		{
+			//Create our NPC
+			Create_Npc(id);
+		}
+		case 2:
+		{
+			//Remove our NPC by the users aim
+			new iEnt, body, szClassname[32];
+			get_user_aiming(id, iEnt, body);
+			
+			if (is_valid_ent(iEnt)) 
+			{
+				entity_get_string(iEnt, EV_SZ_classname, szClassname, charsmax(szClassname));
+				
+				if (equal(szClassname, g_NpcClassName)) 
+				{
+					remove_entity(iEnt);
+				}
+				
+			}
+		}
+		case 3:
+		{
+			//Save the current locations of all the NPCs
+			Save_Npc();
+			
+			client_print(id, print_chat, "[AMXX] NPC origin saved succesfully");
+		}
+		case 4:
+		{
+			//Remove all NPCs from the map
+			remove_entity_name(g_NpcClassName);
+			
+			client_print(id, print_chat, "[AMXX] ALL NPC origin removed");
+		}
+	}
+	
+	//Keep the menu displayed when we choose an option
+	menu_display(id, menu);
+	
+	return PLUGIN_HANDLED;
+}
+
+public npc_TakeDamage(iEnt, inflictor, attacker, Float:damage, bits)
+{
+	//Make sure we only catch our NPC by checking the classname
+	new className[32];
+	entity_get_string(iEnt, EV_SZ_classname, className, charsmax(className))
+	
+	if(!equali(className, g_NpcClassName))
+		return;
+		
+	//Play a random animation when damanged
+	Util_PlayAnimation(iEnt, random_num(13, 17), 1.25);
+
+	//Make our NPC say something when it is damaged
+	//NOTE: Interestingly... Our NPC mouth (which is a controller) moves!! That saves us some work!!
+	emit_sound(iEnt, CHAN_VOICE, g_NpcSoundPain[random(sizeof g_NpcSoundPain)],  VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+	
+	g_Hit[attacker] = true;
+}
+
+public npc_Killed(iEnt)
+{
+	new className[32];
+	entity_get_string(iEnt, EV_SZ_classname, className, charsmax(className))
+	
+	if(!equali(className, g_NpcClassName))
+		return HAM_IGNORED;
+
+	//Player a death animation once our NPC is killed
+	Util_PlayAnimation(iEnt, random_num(25, 30))
+
+	//Because our NPC may look like it is laying down. 
+	//The bounding box size is still there and it is impossible to change it so we will make the solid of our NPC to nothing
+	entity_set_int(iEnt, EV_INT_solid, SOLID_NOT);
+
+	//The voice of the NPC when it is dead
+	emit_sound(iEnt, CHAN_VOICE, g_NpcSoundDeath[random(sizeof g_NpcSoundDeath)],  VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+
+	//Our NPC is dead so it shouldn't take any damage and play any animations
+	entity_set_float(iEnt, EV_FL_takedamage, 0.0);
+	//Our death boolean should now be true!!
+	g_NpcDead[iEnt] = true;
+		
+	//The most important part of this forward!! We have to block the death forward.
+	return HAM_SUPERCEDE
+}
+
+public npc_Think(iEnt)
+{
+	if(!is_valid_ent(iEnt))
+		return;
+	
+	static className[32];
+	entity_get_string(iEnt, EV_SZ_classname, className, charsmax(className))
+	
+	if(!equali(className, g_NpcClassName))
+		return;
+	
+	//We can remove our NPC here if we wanted to but I left this blank as I personally like it when there is a NPC coprse laying around
+	if(g_NpcDead[iEnt])
+	{
+		return;
+	}
+		
+	//Our NPC just spawned
+	if(g_NpcSpawn[iEnt])
+	{
+		static Float: mins[3], Float: maxs[3];
+		pev(iEnt, pev_absmin, mins);
+		pev(iEnt, pev_absmax, maxs);
+
+		//Draw a box which is the size of the bounding NPC
+		message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+		write_byte(TE_BOX)
+		engfunc(EngFunc_WriteCoord, mins[0])
+		engfunc(EngFunc_WriteCoord, mins[1])
+		engfunc(EngFunc_WriteCoord, mins[2])
+		engfunc(EngFunc_WriteCoord, maxs[0])
+		engfunc(EngFunc_WriteCoord, maxs[1])
+		engfunc(EngFunc_WriteCoord, maxs[2])
+		write_short(100)
+		write_byte(random_num(25, 255))
+		write_byte(random_num(25, 255))
+		write_byte(random_num(25, 255))
+		message_end();
+		
+		//Our NPC spawn boolean is now set to false
+		g_NpcSpawn[iEnt] = false;
+	}
+	
+	//Choose a random idle animation
+	Util_PlayAnimation(iEnt, NPC_IdleAnimations[random(sizeof NPC_IdleAnimations)]);
+
+	//Make our NPC think every so often
+	entity_set_float(iEnt, EV_FL_nextthink, get_gametime() + random_float(5.0, 10.0));
+}
+
+public npc_TraceAttack(iEnt, attacker, Float: damage, Float: direction[3], trace, damageBits)
+{
+	if(!is_valid_ent(iEnt))
+		return;
+	
+	new className[32];
+	entity_get_string(iEnt, EV_SZ_classname, className, charsmax(className))
+	
+	if(!equali(className, g_NpcClassName))
+		return;
+		
+	//Retrieve the end of the trace
+	new Float: end[3]
+	get_tr2(trace, TR_vecEndPos, end);
+	
+	//This message will draw blood sprites at the end of the trace
+	message_begin(MSG_BROADCAST,SVC_TEMPENTITY)
+	write_byte(TE_BLOODSPRITE)
+	engfunc(EngFunc_WriteCoord, end[0])
+	engfunc(EngFunc_WriteCoord, end[1])
+	engfunc(EngFunc_WriteCoord, end[2])
+	write_short(spr_blood_spray)
+	write_short(spr_blood_drop)
+	write_byte(247) // color index
+	write_byte(random_num(1, 5)) // size
+	message_end()
+}
+
+public npc_ObjectCaps(id)
+{
+	//Make sure player is alive
+	if(!is_user_alive(id))
+		return;
+
+	//Check when player presses +USE key
+	if(get_user_button(id) & IN_USE)
+	{		
+		//Check cooldown of player when using our NPC
+		static Float: gametime ; gametime = get_gametime();
+		if(gametime - 1.0 > g_Cooldown[id])
+		{
+			//Get the classname of whatever ent we are looking at
+			static iTarget, iBody, szAimingEnt[32];
+			get_user_aiming(id, iTarget, iBody, 75);
+			entity_get_string(iTarget, EV_SZ_classname, szAimingEnt, charsmax(szAimingEnt));
+			
+			//Make sure our aim is looking at a NPC
+			if(equali(szAimingEnt, g_NpcClassName))
+			{
+				//Do more fancy stuff here such as opening a menu
+				//But for this tutorial I will only display a message to prove it works
+				client_print(id, print_chat, "Hello");
+			}
+			
+			//Set players cooldown to the current gametime
+			g_Cooldown[id] = gametime;
+		}
+	}
+}
+
+public npc_EmitSound(id, channel, sample[], Float:volume, Float:attn, flag, pitch)
+{
+	//Make sure player is alive
+	if(!is_user_connected(id))
+		return FMRES_SUPERCEDE;
+
+	//Catch the current button player is pressing
+	new iButton = get_user_button(id);
+					
+	//If the player knifed the NPC
+	if(g_Hit[id])
+	{	
+		//Catch the string and make sure its a knife 
+		if (sample[0] == 'w' && sample[1] == 'e' && sample[8] == 'k' && sample[9] == 'n')
+		{
+			//Catch the file of _hitwall1.wav or _slash1.wav/_slash2.wav
+			if(sample[17] == 's' || sample[17] == 'w')
+			{
+				//If player is slashing then play the knife hit sound
+				if(iButton & IN_ATTACK)
+				{
+					emit_sound(id, CHAN_WEAPON, g_NpcSoundKnifeHit[random(sizeof g_NpcSoundKnifeHit)], volume, attn, flag, pitch);
+				}
+				//If player is tabbing then play the stab sound
+				else if(iButton & IN_ATTACK2)
+				{
+					emit_sound(id,CHAN_WEAPON, g_NpcSoundKnifeStab, volume, attn, flag, pitch);
+				}
+
+				//Reset our boolean as player is not hitting NPC anymore
+				g_Hit[id] = false;
+				
+				//Block any further sounds to be played
+				return FMRES_SUPERCEDE
+			}
+		}
+	}
+	
+	return FMRES_IGNORED
+}
+
+public Event_NewRound()
+{
+	new iEnt = -1;
+	
+	//Scan and find all of the NPC classnames
+	while( ( iEnt = find_ent_by_class(iEnt, g_NpcClassName) ) )
+	{
+		//If we find a NPC which is dead...
+		if(g_NpcDead[iEnt])
+		{
+			//Reset the solid box
+			entity_set_int(iEnt, EV_INT_solid, SOLID_BBOX);
+			//Make our NPC able to take damage again
+			entity_set_float(iEnt, EV_FL_takedamage, 1.0);
+			//Make our NPC instanstly think
+			entity_set_float(iEnt, EV_FL_nextthink, get_gametime() + 0.01);
+			
+			//Reset the NPC boolean to false
+			g_NpcDead[iEnt] = false;
+		}	
+		
+		//Reset the health of our NPC
+		entity_set_float(iEnt, EV_FL_health, 250.0);
+	}
+}
+
+Create_Npc(id, Float:flOrigin[3]= { 0.0, 0.0, 0.0 }, Float:flAngle[3]= { 0.0, 0.0, 0.0 } )
+{
+	//Create an entity using type 'info_target'
+	new iEnt = create_entity("info_target");
+	
+	//Set our entity to have a classname so we can filter it out later
+	entity_set_string(iEnt, EV_SZ_classname, g_NpcClassName);
+		
+	//If a player called this function
+	if(id)
+	{
+		//Retrieve the player's origin
+		entity_get_vector(id, EV_VEC_origin, flOrigin);
+		//Set the origin of the NPC to the current players location
+		entity_set_origin(iEnt, flOrigin);
+		//Increase the Z-Axis by 80 and set our player to that location so they won't be stuck
+		flOrigin[2] += 80.0;
+		entity_set_origin(id, flOrigin);
+		
+		//Retrieve the player's  angle
+		entity_get_vector(id, EV_VEC_angles, flAngle);
+		//Make sure the pitch is zeroed out
+		flAngle[0] = 0.0;
+		//Set our NPC angle based on the player's angle
+		entity_set_vector(iEnt, EV_VEC_angles, flAngle);
+	}
+	//If we are reading from a file
+	else 
+	{
+		//Set the origin and angle based on the values of the parameters
+		entity_set_origin(iEnt, flOrigin);
+		entity_set_vector(iEnt, EV_VEC_angles, flAngle);
+	}
+
+	//Set our NPC to take damange and how much health it has
+	entity_set_float(iEnt, EV_FL_takedamage, 1.0);
+	entity_set_float(iEnt, EV_FL_health, 250.0);
+
+	//Set a model for our NPC
+	entity_set_model(iEnt, g_NpcModel);
+	//Set a movetype for our NPC
+	entity_set_int(iEnt, EV_INT_movetype, MOVETYPE_PUSHSTEP);
+	//Set a solid for our NPC
+	entity_set_int(iEnt, EV_INT_solid, SOLID_BBOX);
+	
+	
+	//Create a bounding box for oru NPC
+	new Float: mins[3] = {-12.0, -12.0, 0.0 }
+	new Float: maxs[3] = { 12.0, 12.0, 75.0 }
+
+	entity_set_size(iEnt, mins, maxs);
+	
+	//Controllers for our NPC. First controller is head. Set it so it looks infront of itself
+	entity_set_byte(iEnt,EV_BYTE_controller1,125);
+	// entity_set_byte(ent,EV_BYTE_controller2,125);
+	// entity_set_byte(ent,EV_BYTE_controller3,125);
+	// entity_set_byte(ent,EV_BYTE_controller4,125);
+	
+	//Drop our NPC to the floor
+	drop_to_floor(iEnt);
+	
+	// set_rendering( ent, kRenderFxDistort, 0, 0, 0, kRenderTransAdd, 127 );
+	
+	//We just spawned our NPC so it should not be dead
+	g_NpcSpawn[iEnt] = true;
+	g_NpcDead[iEnt] = false;
+	
+	//Make it instantly think
+	entity_set_float(iEnt, EV_FL_nextthink, get_gametime() + 0.01)
+}
+
+Load_Npc()
+{
+	//Get the correct filepath and mapname
+	new szConfigDir[256], szFile[256], szNpcDir[256];
+	
+	get_configsdir(szConfigDir, charsmax(szConfigDir));
+	
+	new szMapName[32];
+	get_mapname(szMapName, charsmax(szMapName));
+	
+	formatex(szNpcDir, charsmax(szNpcDir),"%s/NPC", szConfigDir);
+	formatex(szFile, charsmax(szFile),  "%s/%s.cfg", szNpcDir, szMapName);
+		
+	//If the filepath does not exist then we will make one
+	if(!dir_exists(szNpcDir))
+	{
+		mkdir(szNpcDir);
+	}
+	
+	//If the map config file does not exist we will make one
+	if(!file_exists(szFile))
+	{
+		write_file(szFile, "");
+	}
+	
+	//Variables to store when reading our file
+	new szFileOrigin[3][32]
+	new sOrigin[128], sAngle[128];
+	new Float:fOrigin[3], Float:fAngles[3];
+	new iLine, iLength, sBuffer[256];
+	
+	//When we are reading our file...
+	while(read_file(szFile, iLine++, sBuffer, charsmax(sBuffer), iLength))
+	{
+		//Move to next line if the line is commented
+		if((sBuffer[0]== ';') || !iLength)
+			continue;
+		
+		//Split our line so we have origin and angle. The split is the vertical bar character
+		strtok(sBuffer, sOrigin, charsmax(sOrigin), sAngle, charsmax(sAngle), '|', 0);
+				
+		//Store the X, Y and Z axis to our variables made earlier
+		parse(sOrigin, szFileOrigin[0], charsmax(szFileOrigin[]), szFileOrigin[1], charsmax(szFileOrigin[]), szFileOrigin[2], charsmax(szFileOrigin[]));
+		
+		fOrigin[0] = str_to_float(szFileOrigin[0]);
+		fOrigin[1] = str_to_float(szFileOrigin[1]);
+		fOrigin[2] = str_to_float(szFileOrigin[2]);
+				
+		//Store the yawn angle
+		fAngles[1] = str_to_float(sAngle[1]);
+		
+		//Create our NPC
+		Create_Npc(0, fOrigin, fAngles)
+		
+		//Keep reading the file until the end
+	}
+}
+
+Save_Npc()
+{
+	//Variables
+	new szConfigsDir[256], szFile[256], szNpcDir[256];
+	
+	//Get the configs directory.
+	get_configsdir(szConfigsDir, charsmax(szConfigsDir));
+	
+	//Get the current map name
+	new szMapName[32];
+	get_mapname(szMapName, charsmax(szMapName));
+	
+	//Format 'szNpcDir' to ../configs/NPC
+	formatex(szNpcDir, charsmax(szNpcDir),"%s/NPC", szConfigsDir);
+	//Format 'szFile to ../configs/NPC/mapname.cfg
+	formatex(szFile, charsmax(szFile), "%s/%s.cfg", szNpcDir, szMapName);
+		
+	//If there is already a .cfg for the current map. Delete it
+	if(file_exists(szFile))
+		delete_file(szFile);
+	
+	//Variables
+	new iEnt = -1, Float:fEntOrigin[3], Float:fEntAngles[3];
+	new sBuffer[256];
+	
+	//Scan and find all of my custom ents
+	while( ( iEnt = find_ent_by_class(iEnt, g_NpcClassName) ) )
+	{
+		//Get the entities' origin and angle
+		entity_get_vector(iEnt, EV_VEC_origin, fEntOrigin);
+		entity_get_vector(iEnt, EV_VEC_angles, fEntAngles);
+		
+		//Format the line of one custom ent.
+		formatex(sBuffer, charsmax(sBuffer), "%d %d %d | %d", floatround(fEntOrigin[0]), floatround(fEntOrigin[1]), floatround(fEntOrigin[2]), floatround(fEntAngles[1]));
+		
+		//Finally write to the mapname.cfg file and move on to the next line
+		write_file(szFile, sBuffer, -1);
+		
+		//We are currentlying looping to find all custom ents on the map. If found another ent. Do the above till there is none.
+	}
+	
+}
+
+stock Util_PlayAnimation(index, sequence, Float: framerate = 1.0)
+{
+	entity_set_float(index, EV_FL_animtime, get_gametime());
+	entity_set_float(index, EV_FL_framerate,  framerate);
+	entity_set_float(index, EV_FL_frame, 0.0);
+	entity_set_int(index, EV_INT_sequence, sequence);
+}

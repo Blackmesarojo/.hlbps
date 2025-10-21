@@ -1,0 +1,53 @@
+//Continue to explore the world.
+stock Function_FakePlayerTouch(pBot)
+{
+	new Float: pBotOrigin[3];
+	pev(pBot, pev_origin, pBotOrigin);
+	
+	#define HULL_SIZE ((pev(pBot, pev_flags) & FL_DUCKING) ? HULL_HEAD : HULL_HUMAN)
+	#define BOT_VEC_MAXSPEED 100.0
+	#define BOT_VEC_MINSPEED 20.0
+	#define FL_MAX 3
+	
+	new Float: iNewOrigin[3];
+    
+	for(new M_FL = NULL; M_FL < FL_MAX; M_FL ++)
+	{
+		iNewOrigin = pBotOrigin;
+		iNewOrigin[M_FL / 2] += ((M_FL % 2) ? -1.0 : 1.0);
+		
+		engfunc(EngFunc_TraceHull, iNewOrigin, iNewOrigin, DONT_IGNORE_MONSTERS, HULL_SIZE, pBot, NULL);
+        
+		//If it's wall - rotate it to opposite angle and let him continue moving.
+		if(get_tr2(NULL, TR_InOpen) && !get_tr2(NULL, TR_AllSolid) && !get_tr2(NULL, TR_StartSolid))
+		{		
+			new Float: iVelocity[3];
+			pev(pBot, pev_velocity, iVelocity);
+			
+			//Unknown position/flying down or ladder stuck. Or stuck between glass.
+			new iUnknownPosition = pev(pBot, pev_movetype) == MOVETYPE_FLY;
+			
+			//Get speed.
+			new Float: iPBSpeed = floatsqroot(iVelocity[0] * iVelocity[0] + iVelocity[1] * iVelocity[1] + iVelocity[2] * iVelocity[2]);	
+			
+			//Looks like it's stuck.	
+			if(iPBSpeed < BOT_VEC_MAXSPEED)
+			{
+				//Proper angle to avoid this touch again.
+				c_fakeplayer_angles[pBot][1] -= MAX_ANGLE_YAW / 2;		
+					
+				//Set angles
+				Function_ApplyAngles(pBot, c_fakeplayer_angles[pBot]);
+			}	
+			
+			//Call jumping, if this is maybe stucked near stairs or box.
+			if(iPBSpeed < BOT_VEC_MINSPEED || iUnknownPosition)
+				c_fakeplayer_walltouch[pBot] = true;		
+
+			//Send next try attempt.
+			c_fakeplayer_walltouch_time[pBot] = get_gametime() + FAKE_PLAYER_WALLTOUCH_TIMER;
+			
+			break;
+		}
+	}	
+}	

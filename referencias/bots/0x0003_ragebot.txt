@@ -1,0 +1,105 @@
+//Rage aimbot without hitscan. Random spread.
+stock Function_Ragebot(pBot)
+{
+	//Note: Increase Max Distance, if Bot is not shooting and distance is too far
+	new Float: flMaxDistance = RAGEBOT_MAX_DISTANCE;
+	new iSelectedPlayer = NULL;
+
+	//Get *pBot->attacker position.
+	new Float: pBotPosition[3];
+	pev(pBot, pev_origin, pBotPosition);
+		
+	//Get *pBot->attacker view position.
+	new Float: pBotViewPosition[3];
+	pev(pBot, pev_view_ofs, pBotViewPosition);
+		
+	pBotPosition[0] += pBotViewPosition[0];
+	pBotPosition[1] += pBotViewPosition[1];
+	pBotPosition[2] += pBotViewPosition[2];
+					
+	/*Start Ragebot scan loop.
+	NOTE: You can select target inside loop, if you want to make all bots attack selected target.*/
+	for(new pEnemy = 1; pEnemy < MaxClients + 1; pEnemy ++)
+	{			
+		//Enemies only.
+		if(Function_ReturnPlayerMode(pBot, pEnemy) != NULL)
+		{
+			//Get Enemy position.
+			pev(pEnemy, pev_origin, c_fakeplayer_position[pEnemy]);
+				
+			//Get Enemy view position.
+			pev(pEnemy, pev_view_ofs, c_fakeplayer_view[pEnemy]);
+
+			c_fakeplayer_position[pEnemy][0] += c_fakeplayer_view[pEnemy][0];
+			c_fakeplayer_position[pEnemy][1] += c_fakeplayer_view[pEnemy][1];
+			c_fakeplayer_position[pEnemy][2] += c_fakeplayer_view[pEnemy][2];
+					
+			//Start trace.
+			if(Function_MonsterDetection(pBotPosition, c_fakeplayer_position[pEnemy]))
+			{
+				//Return distance between them.
+				new Float: flDistance = get_distance_f(pBotPosition, c_fakeplayer_position[pEnemy]);
+        
+				//Found.
+				if(flDistance < flMaxDistance)
+				{
+					iSelectedPlayer = pEnemy;
+					flMaxDistance = flDistance;	
+				}
+			}
+		}
+	}
+							
+	//Lock on selected enemy.
+	if(iSelectedPlayer != NULL)
+	{
+		/*Switch to Primary weapon. Do your own stuff with weapons here.
+		NOTE: Need to check for empty weapon too, no need to flood that.*/
+		if(c_fakeplayer_weapon[pBot])
+		{
+			#if defined PB_WEAPON_MODE
+			
+				Function_SelectPrimaryWeapon(pBot);
+					
+			#endif
+					
+			c_fakeplayer_weapon[pBot] = false;
+		}	
+							
+		//Convert start.
+		new Float: iDirection[3], Float: ResultOrigin[3];
+			
+		//Correct to hit head randomly, not instant.
+		#define ANGLE_HEADSHOT 15.0
+			
+		//Generate random spray.
+		#define ANGLE_MOVEMENT 50.0
+	
+		ResultOrigin[0] = pBotPosition[0] - c_fakeplayer_position[iSelectedPlayer][0];
+		ResultOrigin[1] = pBotPosition[1] - c_fakeplayer_position[iSelectedPlayer][1] - random_float(- ANGLE_MOVEMENT, ANGLE_MOVEMENT / 2);
+		ResultOrigin[2] = pBotPosition[2] - c_fakeplayer_position[iSelectedPlayer][2] - random_float(DEFAULT_ANGLE, ANGLE_HEADSHOT);
+
+		//Equal to two right angles.
+		#define STRAIGHT_ANGLE 180.0
+			
+		//From Radian.
+		iDirection[0] = (floatatan(ResultOrigin[2] / floatsqroot((ResultOrigin[0] * ResultOrigin[0]) + (ResultOrigin[1] * ResultOrigin[1])), NULL) * STRAIGHT_ANGLE / M_PI);
+		iDirection[1] = (floatatan(ResultOrigin[1] / ResultOrigin[0], NULL) * STRAIGHT_ANGLE / M_PI);
+	
+		if(ResultOrigin[0] >= DEFAULT_ANGLE) 
+			iDirection[1] += MAX_ANGLE_YAW;
+								
+		//Apply Ragebot lock. Check for tripmine and satchel.
+		if(!c_fakeplayer_weapon_explosion[pBot])	
+			Function_ApplyAngles(pBot, iDirection);
+
+		//Set reaction timer.
+		Function_SetupDifficulty(pBot);						
+
+		//Random pBot action.
+		Function_PlayerWeaponAction(pBot);
+
+		//This is locked attack now.
+		c_fakeplayer_attacking[pBot] = true;				
+	}		
+}	

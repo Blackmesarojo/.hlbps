@@ -1,0 +1,115 @@
+// mmaxbot/mmaxbot_control.sma
+// Módulo para el control manual de los bots.
+
+#if defined _mmaxbot_control_included
+    #endinput
+#endif
+#define _mmaxbot_control_included
+
+// --- VARIABLES GLOBALES PARA EL CONTROL MANUAL ---
+new bool:g_is_controlling[33];
+new Float:g_owner_move[33][3];
+new Float:g_owner_angles[33][3];
+new g_owner_buttons[33];
+new g_owner_impulse[33];
+
+// --- REGISTRO DE FORWARDS ---
+new fwd_CmdStart_Control;
+new fwd_StartFrame_Control;
+
+/**
+ * Activa o desactiva el modo de control manual para los bots de un jugador.
+ */
+public cmd_bot_control(id, level, cid) {
+    if (!cmd_access(id, level, cid, 1)) {
+        return PLUGIN_HANDLED;
+    }
+
+    if (ownerBotCount[id] == 0) {
+        client_print(id, print_chat, "[MMod Bot] No tienes bots para controlar.");
+        return PLUGIN_HANDLED;
+    }
+    
+    g_is_controlling[id] = !g_is_controlling[id];
+
+    if (g_is_controlling[id]) {
+        client_print(id, print_chat, "[MMod Bot] Control manual ACTIVADO. Tus movimientos se copiarán a tus bots.");
+    } else {
+        client_print(id, print_chat, "[MMod Bot] Control manual DESACTIVADO. Los bots vuelven a su IA normal.");
+    }
+
+    return PLUGIN_HANDLED;
+}
+
+/**
+ * Captura la entrada de movimiento del jugador cuando el control manual está activo.
+ */
+public fw_CmdStart_Control(id, uc_handle, random_seed) {
+    if (!g_is_controlling[id] || !is_user_alive(id)) {
+        return FMRES_IGNORED;
+    }
+    
+    get_uc(uc_handle, UC_ViewAngles, g_owner_angles[id]);
+    get_uc(uc_handle, UC_ForwardMove, g_owner_move[id][0]);
+    get_uc(uc_handle, UC_SideMove,   g_owner_move[id][1]);
+    get_uc(uc_handle, UC_UpMove,     g_owner_move[id][2]);
+    g_owner_buttons[id] = get_uc(uc_handle, UC_Buttons);
+    g_owner_impulse[id] = get_uc(uc_handle, UC_Impulse);
+
+    return FMRES_IGNORED;
+}
+
+/**
+ * Aplica el movimiento capturado del jugador a sus bots en cada frame del servidor.
+ */
+public fw_StartFrame_Control() {
+    // CORRECCIÓN: Usar glb_frametime para obtener el tiempo exacto del frame, solucionando el problema de velocidad.
+    static Float:msecval;
+    global_get(glb_frametime, msecval);
+    new msec = floatround(msecval * 1000.0);
+
+    for (new id = 1; id <= get_maxplayers(); id++) {
+        if (!g_is_controlling[id] || ownerBotCount[id] == 0) {
+            continue;
+        }
+
+        for (new i = 0; i < ownerBotCount[id]; i++) {
+            new bot_id = botindex[id][i];
+            if (is_user_connected(bot_id) && is_user_alive(bot_id)) {
+                
+                // --- INICIO DE CORRECCIÓN DE MIRADA ---
+                // Forzamos el ángulo de visión del bot para que sea idéntico al del jugador.
+                set_pev(bot_id, pev_v_angle, g_owner_angles[id]);
+
+                // Ajustamos el ángulo del modelo (cuerpo) para que coincida.
+                // El pitch (mirar arriba/abajo) se divide para que el modelo no se incline de forma extraña.
+                static Float:body_angles[3];
+                vector_copy(g_owner_angles[id], body_angles);
+                body_angles[0] /= -3.0; // Corrección de pitch para el modelo
+                body_angles[2] = 0.0;     // El roll del modelo siempre debe ser 0
+                set_pev(bot_id, pev_angles, body_angles);
+                // --- FIN DE CORRECCIÓN DE MIRADA ---
+
+                // Usamos RunPlayerMove para simular el movimiento en el bot con los datos corregidos.
+                engfunc(EngFunc_RunPlayerMove, bot_id, g_owner_angles[id], g_owner_move[id][0], g_owner_move[id][1], g_owner_move[id][2], g_owner_buttons[id], g_owner_impulse[id], msec);
+            }
+        }
+    }
+}
+
+
+/**
+ * Registra los forwards necesarios para el módulo de control.
+ */
+stock register_control_forwards() {
+    fwd_CmdStart_Control = register_forward(FM_CmdStart, "fw_CmdStart_Control");
+    fwd_StartFrame_Control = register_forward(FM_StartFrame, "fw_StartFrame_Control", 1);
+}
+
+/**
+ * Desregistra los forwards para ahorrar recursos cuando no hay bots.
+ */
+stock unregister_control_forwards() {
+    unregister_forward(FM_CmdStart, fwd_CmdStart_Control);
+    unregister_forward(FM_StartFrame, fwd_StartFrame_Control, 1);
+}

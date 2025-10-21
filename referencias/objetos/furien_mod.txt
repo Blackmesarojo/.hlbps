@@ -1,0 +1,5673 @@
+#include <amxmodx>
+#include <amxmisc>
+#include <hamsandwich>
+#include <fakemeta_util>
+#include <fakemeta>
+#include <cstrike>
+#include <engine>
+#include <fun>
+
+#if AMXX_VERSION_NUM < 183
+#include <dhudmessage>
+#define MAX_PLAYERS			32
+#endif
+
+#include <nvault>
+
+#pragma dynamic				32768
+
+#define PLUGIN				"Furien Mod v0.5.7"
+
+#define XTRA_OFS_PLAYER 		5
+
+#define Money_Amount			1
+#define XTRA_OFS_PLAYER			5
+#define m_iAccount			115
+#define cs_set_money_value(%1,%2)	set_pdata_int(%1, m_iAccount, %2, XTRA_OFS_PLAYER)
+
+#define EmitSnd(%1,%2)			emit_sound(%1, CHAN_ITEM, %2, VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+
+#define nvault_clear(%1) 		nvault_prune(%1, 0, get_systime() + 1)
+#define isTeam(%0) 			(CS_TEAM_T <= cs_get_user_team(%0) <= CS_TEAM_CT)
+
+#define TOTAL_KNIVES 			8
+#define TOTAL_ITEMS 			8
+
+#define IsPlayer(%1)			(FIRST_PLAYER <= %1 <= g_iMaxPlayers)
+#define IsHeadShot(%1)			(get_pdata_int(%1,75) == HIT_HEAD)
+
+#define ADMIN_VIP 			ADMIN_LEVEL_H
+#define ADMIN_SVIP 			ADMIN_LEVEL_G
+
+#define PISTOL_WEAPONS_BIT		(1<<CSW_GLOCK18|1<<CSW_USP|1<<CSW_DEAGLE|1<<CSW_P228|1<<CSW_FIVESEVEN|1<<CSW_ELITE)
+#define SHOTGUN_WEAPONS_BIT		(1<<CSW_M3|1<<CSW_XM1014)
+#define SUBMACHINE_WEAPONS_BIT		(1<<CSW_TMP|1<<CSW_MAC10|1<<CSW_MP5NAVY|1<<CSW_UMP45|1<<CSW_P90)
+#define RIFLE_WEAPONS_BIT		(1<<CSW_FAMAS|1<<CSW_GALIL|1<<CSW_AK47|1<<CSW_SCOUT|1<<CSW_M4A1|1<<CSW_SG550|1<<CSW_SG552|1<<CSW_AUG|1<<CSW_AWP|1<<CSW_G3SG1)
+#define MACHINE_WEAPONS_BIT		(1<<CSW_M249)
+
+#define PRIMARY_WEAPONS_BIT		(SHOTGUN_WEAPONS_BIT|SUBMACHINE_WEAPONS_BIT|RIFLE_WEAPONS_BIT|MACHINE_WEAPONS_BIT)
+#define SECONDARY_WEAPONS_BIT		(PISTOL_WEAPONS_BIT)
+
+#define IsPrimaryWeapon(%1)		((1<<%1) & PRIMARY_WEAPONS_BIT)
+#define IsSecondaryWeapon(%1)		((1<<%1) & PISTOL_WEAPONS_BIT)
+
+#define MODELSET_TASK 			100 
+#define MODELCHANGE_DELAY 		0.6
+
+const FIRST_PLAYER =			1
+const USE_STOPPED =			0
+const PDATA_SAFE =			2
+const OFFSET_LINUX_WEAPONS =		4
+const SUPERKNIFE_BOUGHT_MAX =		4
+const PLAYER_JUMP =			6
+const ACT_HOP =  			7
+const m_pPlayer = 			41
+const m_Activity = 			73
+const m_IdealActivity =			74
+const m_flNextAttack =			83
+const m_flNextPrimaryAttack =		46
+const m_afButtonPressed =		246
+const m_pActiveItem =			373
+const TASK_REMOVE_FREEZE =		200210
+const TASK_REMOVE_RADAR =		200211
+const TASK_HUD_SPECIAL_ITEM =		200222
+const TASK_SHOW_RADAR =			200223
+const TASK_REGEN =			200224
+const TASK_HUD =			200225
+const TASK_IMMOR =			200226
+const TASK_RADAR =			200227
+const TASK_SHOW_INFO =			200228
+const TASK_SHOW_BEST_MONEY =		200229
+const TASK_GRAB =			200230
+const TASK_IMMOBILIZE =			200231
+const TASK_C4 =				200232
+const Ham:Ham_Player_ResetMaxSpeed =	Ham_Item_PreFrame
+const DMG_NADE =			(1<<24)
+
+new RoundsCount =			0
+new iSuperKnifeCount =			0
+
+new const SlowGun_Sounds[] =		"FurienEFFx/weapsounds/slowgun.wav"
+new const SleepGun_Sounds[] =		"FurienEFFx/weapsounds/sleepgun.wav"
+new const ItemBoughtSound[] =		"items/gunpickup2.wav"
+new const SpecialItemBoughtSound[] =	"items/ammopickup1"
+new const sleepgun[] =			"models/FurienEFFx/v_sleepgun.mdl"
+new const p_sleepgun[] =			"models/FurienEFFx/p_sleepgun.mdl"
+new const slowgun[] =			"models/FurienEFFx/v_slowgun.mdl"
+new const p_slowgun[] =			"models/FurienEFFx/p_slowgun.mdl"
+new const g_szClassname[] =		"invisibility"
+new const g_szFolder[] = 		"FurienSettings"
+
+enum _:g_szKnives
+{
+	KNIFE_DEFAULT,
+	KNIFE_COMBAT,
+	KNIFE_AXE,
+	KNIFE_SILVER,
+	KNIFE_HUNTER,
+	KNIFE_SPIRIT,
+	KNIFE_EPIC,
+	KNIFE_CROWBAR,
+	KNIFE_DEAD
+}
+
+enum _:g_szItems
+{
+	ITEM_NONE,
+	ITEM_REGEN,
+	ITEM_MULTI_JUMP,
+	ITEM_NO_DAMAGE,
+	ITEM_CONFUSED,
+	ITEM_IMMORTALITY,
+	ITEM_IMMOBILIZE,
+	ITEM_WISE_EYE,
+	ITEM_BUNNYHOP
+}
+
+new g_szItem[MAX_PLAYERS+1][g_szItems]
+new g_szKnife[MAX_PLAYERS+1][g_szKnives]
+
+enum AFPWSettings
+{
+	szPWeaponName[MAX_PLAYERS],
+	iPWeaponCost,
+	szPWeaponIndex[17],
+	szPWeaponType,
+	iPWeaponBpAmmo
+}
+
+new const AntiFurienPWeapons[][AFPWSettings] =
+{
+	{ "UMP^t^t^t^t^t    \r0$", 0, "weapon_ump45", CSW_UMP45, 250 },
+	{ "M3^t^t^t^t^t^t    \r0$", 0, "weapon_m3", CSW_M3, 250 },
+	{ "AWP^t^t^t^t    \r15$", 15, "weapon_awp", CSW_AWP,250 },
+	{ "MP5^t^t^t^t^t   \r25$", 25, "weapon_mp5navy", CSW_MP5NAVY,250 },
+	{ "AK47^t^t^t^t   \r35$", 35, "weapon_ak47", CSW_AK47, 250 },
+	{ "M4A1^t^t^t^t   \r35$", 35, "weapon_m4a1", CSW_M4A1, 250 },
+	{ "M249^t^t^t^t   \r99$", 99, "weapon_m249", CSW_M249, 250 },
+	{ "\y[ExtraVIP] \wFAMAS \r60$", 60, "weapon_famas", CSW_FAMAS, 250 }	
+}
+
+enum AFSWSettings
+{
+	szSWeaponName[MAX_PLAYERS],
+	iSWeaponCost,
+	szSWeaponIndex[17],
+	szSWeaponType,
+	iSWeaponBpAmmo
+}
+
+new const AntiFurienSWeapons[][AFSWSettings] =
+{
+	{ "Glock ^t^t^t^t^t^t^t^t\dprice: \r0$", 0, "weapon_glock18", CSW_GLOCK18, 250 },
+	{ "USP pistol ^t^t^t^t\dprice: \r5$", 5, "weapon_usp", CSW_USP, 250 },
+	{ "FiveseveN  ^t^t^t\dprice: \r5$", 5, "weapon_fiveseven", CSW_FIVESEVEN, 250 },
+	{ "Desert Eagle  ^t\dprice: \r15$", 15, "weapon_deagle", CSW_DEAGLE, 250 },
+	{ "Elite Duals   ^t^t\dprice: \r20$", 20, "weapon_elite", CSW_ELITE, 250 }
+}
+		
+enum
+{	
+	DeathMsg_KillerID = 1,
+	DeathMsg_VictimID
+}
+
+enum WeapSett
+{
+	V_KNIFE_T,
+	V_KNIFE_CT,
+	V_M4A1,
+	V_AK47,
+	V_AWP,
+	V_FAMAS,
+	V_M249,
+	V_MP5,
+	V_UMP45,
+	V_M3,
+	V_C4,
+	V_DEAGLE,
+	V_USP,
+	V_GLOCK18,
+	V_ELITE,
+	V_FIVESEVEN,
+	V_HEGRENADE_V,
+	V_HEGRENADE_P,
+	V_HEGRENADE_W,
+	V_FLASHBANG_V,
+	V_FLASHBANG_P,
+	V_FLASHBANG_W,
+	V_SMOKEGRENADE_V,
+	V_SMOKEGRENADE_P,
+	V_SMOKEGRENADE_W
+}
+
+enum KillSett
+{
+	MONEY_MAX,
+	MONEY_T_EVIP_KILL,
+	MONEY_CT_EVIP_KILL,
+	MONEY_T_VIP_KILL,
+	MONEY_CT_VIP_KILL,
+	MONEY_T_NORMAL_KILL,
+	MONEY_CT_NORMAL_KILL,
+}
+
+enum PlayerModelSett
+{
+	FurienModel,
+	AntiModel
+}
+
+new PlayersSkins[PlayerModelSett][32]
+new KillSettings[KillSett]
+new WeaponSkins[WeapSett][84]
+    
+new g_iNewMoney
+new g_iMsgHookMoney
+
+new Float:g_t_time
+new iEnt
+
+new const Knives[][] = 
+{
+	"models/FurienEFFx/knifes/p_knife_axe.mdl",
+	"models/FurienEFFx/knifes/v_knife_axe.mdl",
+	"models/FurienEFFx/knifes/p_knife_comba.mdl",
+	"models/FurienEFFx/knifes/v_knife_comba.mdl",
+	"models/FurienEFFx/knifes/p_knife_silver.mdl",
+	"models/FurienEFFx/knifes/v_knife_silver.mdl",
+	"models/FurienEFFx/knifes/p_knife_hunter.mdl",
+	"models/FurienEFFx/knifes/v_knife_hunter.mdl",
+	"models/FurienEFFx/knifes/v_knife_spirit.mdl",
+	"models/FurienEFFx/knifes/p_knife_epic.mdl",
+	"models/FurienEFFx/knifes/v_knife_epic.mdl", 
+	"models/FurienEFFx/knifes/p_knife_aqr.mdl",
+	"models/FurienEFFx/knifes/v_knife_aqr.mdl",
+	"models/FurienEFFx/knifes/p_knife_dead.mdl",
+	"models/FurienEFFx/knifes/v_knife_dead.mdl" 
+}
+
+new const oldknife_sounds[][] = 
+{
+	"weapons/knife_deploy1.wav",
+	"weapons/knife_hit1.wav",
+	"weapons/knife_hit2.wav",
+	"weapons/knife_hit3.wav",
+	"weapons/knife_hit4.wav",
+	"weapons/knife_hitwall1.wav",
+	"weapons/knife_slash1.wav",
+	"weapons/knife_slash2.wav",
+	"weapons/knife_stab.wav"
+}
+
+new const oldknife_supersounds[][] = 
+{
+	"weapons/knife_deploy1.wav",
+	"weapons/knife_hitwall1.wav",
+	"weapons/knife_slash1.wav",
+	"weapons/knife_slash2.wav",
+	"weapons/knife_stab.wav"
+}
+
+new const SpiritSounds[][] = 
+{ 
+	"FurienEFFx/knifes/knife_deploy1_black.wav",
+	"FurienEFFx/knifes/knife_hit1_black.wav",
+	"FurienEFFx/knifes/knife_hit2_black.wav",
+	"FurienEFFx/knifes/knife_hit1_black.wav",
+	"FurienEFFx/knifes/knife_hit2_black.wav",
+	"FurienEFFx/knifes/knife_hitwall1_black.wav",
+	"FurienEFFx/knifes/knife_slash_black.wav",
+	"FurienEFFx/knifes/knife_slash_black.wav",
+	"FurienEFFx/knifes/knife_stab_black.wav"
+}
+
+new const EpicSounds[][] = 
+{ 
+	"FurienEFFx/knifes/knife_deploy1_combat.wav",
+	"FurienEFFx/knifes/knife_hit1_combat.wav",
+	"FurienEFFx/knifes/knife_hit2_combat.wav",
+	"FurienEFFx/knifes/knife_hit3_combat.wav",
+	"FurienEFFx/knifes/knife_hit4_combat.wav",
+	"FurienEFFx/knifes/knife_hitwall1_combat.wav",
+	"FurienEFFx/knifes/knife_slash_combat.wav",
+	"FurienEFFx/knifes/knife_slash2_combat.wav",
+	"FurienEFFx/knifes/knife_stab_combat.wav"
+}
+
+new const DeadSounds[][] = 
+{ 
+	"FurienEFFx/knifes/knife_deploy1_hunter.wav",
+	"FurienEFFx/knifes/knife_hit1_black.wav",
+	"FurienEFFx/knifes/knife_hit2_black.wav",
+	"FurienEFFx/knifes/knife_hit1_black.wav",
+	"FurienEFFx/knifes/knife_hit2_black.wav",
+	"FurienEFFx/knifes/knife_hitwall1_axe.wav",
+	"FurienEFFx/knifes/knife_slash1_hunter.wav",
+	"FurienEFFx/knifes/knife_slash2_hunter.wav",
+	"FurienEFFx/knifes/knife_stab_black.wav"
+}
+
+new const AxeSounds[][] = 
+{ 
+	"FurienEFFx/knifes/knife_deploy1_axe.wav", 
+	"FurienEFFx/knifes/knife_hit1_axe.wav", 
+	"FurienEFFx/knifes/knife_hit2_axe.wav",
+	"FurienEFFx/knifes/knife_hit1_axe.wav", 
+	"FurienEFFx/knifes/knife_hit2_axe.wav", 
+	"FurienEFFx/knifes/knife_hitwall1_axe.wav",
+	"FurienEFFx/knifes/knife_slash_axe.wav", 
+	"FurienEFFx/knifes/knife_slash_axe.wav", 
+	"FurienEFFx/knifes/knife_stab_axe.wav"
+}
+new const SilverSounds[][] = 
+{
+	"FurienEFFx/knifes/knife_deploy1_combat.wav",
+	"FurienEFFx/knifes/knife_hit1_combat.wav",
+	"FurienEFFx/knifes/knife_hit2_combat.wav",
+	"FurienEFFx/knifes/knife_hit3_combat.wav",
+	"FurienEFFx/knifes/knife_hit4_combat.wav",
+	"FurienEFFx/knifes/knife_hitwall1_hunter.wav",
+	"FurienEFFx/knifes/knife_slash_combat.wav",
+	"FurienEFFx/knifes/knife_slash2_combat.wav",
+	"FurienEFFx/knifes/knife_stab_combat.wav"
+}
+
+new const CombaSounds[][] = 
+{ 
+	"FurienEFFx/knifes/knife_deploy1_combat.wav", 
+	"FurienEFFx/knifes/knife_hit1_combat.wav", 
+	"FurienEFFx/knifes/knife_hit2_combat.wav",
+	"FurienEFFx/knifes/knife_hit3_combat.wav", 
+	"FurienEFFx/knifes/knife_hit4_combat.wav", 
+	"FurienEFFx/knifes/knife_hitwall1_combat.wav",
+	"FurienEFFx/knifes/knife_slash_combat.wav", 
+	"FurienEFFx/knifes/knife_slash2_combat.wav", 
+	"FurienEFFx/knifes/knife_stab_combat.wav"
+}
+
+new const HunterSounds[][] = 
+{ 
+	"FurienEFFx/knifes/knife_deploy1_hunter.wav", 
+	"FurienEFFx/knifes/knife_hit1_hunter.wav", 
+	"FurienEFFx/knifes/knife_hit1_hunter.wav",
+	"FurienEFFx/knifes/knife_hit1_hunter.wav", 
+	"FurienEFFx/knifes/knife_hit1_hunter.wav", 
+	"FurienEFFx/knifes/knife_hitwall1_hunter.wav",
+	"FurienEFFx/knifes/knife_slash1_hunter.wav", 
+	"FurienEFFx/knifes/knife_slash2_hunter.wav", 
+	"FurienEFFx/knifes/knife_stab_combat.wav"
+}
+
+new const SuperSounds[][] = 
+{ 
+	"FurienEFFx/knifes/knife_deploy1_hunter.wav", 
+	"FurienEFFx/knifes/knife_hitwall1_hunter.wav",
+	"FurienEFFx/knifes/knife_slash1_hunter.wav", 
+	"FurienEFFx/knifes/knife_slash2_hunter.wav", 
+	"FurienEFFx/knifes/knife_stab_super.wav"
+}
+
+new const CrowSounds[][] = 
+{ 
+	"FurienEFFx/knifes/knife_deploy1_axe.wav", 
+	"FurienEFFx/knifes/knife_hit1_crow.wav", 
+	"FurienEFFx/knifes/knife_hit2_crow.wav",
+	"FurienEFFx/knifes/knife_hit1_crow.wav", 
+	"FurienEFFx/knifes/knife_hit2_crow.wav", 
+	"FurienEFFx/knifes/knife_hitwall_crow.wav",
+	"FurienEFFx/knifes/knife_slash_crow.wav", 
+	"FurienEFFx/knifes/knife_slash_crow.wav", 
+	"FurienEFFx/knifes/knife_stab_crow.wav"
+}
+
+new const Kills_Sounds[][] = 
+{
+	"FurienEFFx/kills/firstkill.wav",
+	"FurienEFFx/kills/doublekill.wav",
+	"FurienEFFx/kills/triplekill.wav",
+	"FurienEFFx/kills/multikill.wav",
+	"FurienEFFx/kills/excellent.wav",
+	"FurienEFFx/kills/monster.wav",
+	"FurienEFFx/kills/gotit.wav",
+	"FurienEFFx/kills/craz.wav",
+	"FurienEFFx/kills/headshot.wav"
+}
+
+new const Kill_Messages[][] = 
+{
+	"",
+	"FIRST KILL",
+	"DOUBLE KILL",
+	"TRIPLE KILL",
+	"MULTI KILL",
+	"EXCELLENT"
+}
+
+new const g_szTer_Sounds[][] = 
+{
+	"sound/FurienEFFx/round/twin1.mp3",
+	"sound/FurienEFFx/round/twin2.mp3",
+	"sound/FurienEFFx/round/twin3.mp3",
+	"sound/FurienEFFx/round/twin4.mp3",
+	"sound/FurienEFFx/round/twin5.mp3",
+	"sound/FurienEFFx/round/twin6.mp3",
+	"sound/FurienEFFx/round/twin7.mp3",
+	"sound/FurienEFFx/round/twin8.mp3",
+	"sound/FurienEFFx/round/twin9.mp3"
+}
+
+new const g_szCt_Sounds[][] = 
+{
+	"sound/FurienEFFx/round/ctwin1.mp3",
+	"sound/FurienEFFx/round/ctwin2.mp3",
+	"sound/FurienEFFx/round/ctwin3.mp3",
+	"sound/FurienEFFx/round/ctwin4.mp3",
+	"sound/FurienEFFx/round/ctwin5.mp3",
+	"sound/FurienEFFx/round/ctwin6.mp3",
+	"sound/FurienEFFx/round/ctwin7.mp3",
+	"sound/FurienEFFx/round/ctwin8.mp3",
+	"sound/FurienEFFx/round/ctwin9.mp3"
+}
+
+new const ModelsT[2][] = 
+{
+	"terror",
+	"guerilla"
+}
+
+new const ModelsCT[2][] = 
+{
+	"urban",
+	"gign"
+}
+
+new Float:g_models_targettime 
+new Float:g_roundstarttime
+new bool:RoundEnd
+
+new const WEAPONENTNAMES[][] = 
+{
+	"", "weapon_p228", "","weapon_hegrenade", "weapon_c4", 
+	"weapon_smokegrenade", "weapon_elite", "weapon_fiveseven", "weapon_ump45",
+	"weapon_galil", "weapon_famas", "weapon_usp", "weapon_glock18", "weapon_awp", "weapon_mp5navy", "weapon_m249",
+	"weapon_m3", "weapon_m4a1","weapon_tmp", "weapon_flashbang", "weapon_deagle", 
+	"weapon_ak47", "weapon_knife"
+}
+
+new const g_MusicList[][] = 
+{	
+	{"sound/FurienEFFx/furienrs/music1.mp3"},
+	{"sound/FurienEFFx/furienrs/music2.mp3"},
+	{"sound/FurienEFFx/furienrs/music3.mp3"}
+}
+
+new msg_StatusIcon, msg_SayText, msg_TextMsg, msg_ClCorpse, msg_HostagePos, msg_HostageK, msg_SendAudio, msg_Money,msg_ScreenFade
+
+new g_nVaultSaves
+
+new bool:g_bRoundEnd, bool:g_bIsTrue, g_iMaxPlayers
+
+enum HudSyncSettings
+{
+	hudSpecialItems,
+	hudCTWin,
+	hudTWin,
+	hudC4Delay,
+	hudAdv
+}
+
+enum MenuSettings
+{
+	MenuPrimary,
+	MenuSecondary,
+	MenuMessages,
+	MenuAdminCmds
+}
+
+enum pCvarsSettings
+{
+	pCvarFurienGrav,
+	pCvarFurienSpeed,
+	pCvarGrabSpeed,
+	pCvarPlantDelay,
+	pCvarBombPlant,
+	pCvarMinPlayers,
+	pCvarBombDefuse,
+	pCvarContact,
+	pCvarPrefix,
+	pCvarMotdLink,
+	pCvarGameDescription
+}
+
+enum PrivatePlayerDatas
+{
+	bool:g_bIsConnected,
+	bool:g_bSkinSelected,
+	bool:g_bFreezedBySlowG,
+	bool:g_bCantSay,
+	bool:g_bSlashing,
+	g_JumpCount,
+	g_PlayerMoney,
+	g_MyKillCount,
+	iLastShoot,
+	g_szName[MAX_PLAYERS],
+	g_szAuthID[34]
+}
+
+enum EspecialItemsActivated
+{
+	bool:g_bActived_Immor,
+	bool:g_bActived_GodMode,
+	bool:g_bActived_Hit,
+	bool:g_bActived_Speed,
+	bool:g_bActived_Wallhang,
+	bool:g_bActived_SetWallHang,
+	bool:g_bActived_Hanged,
+	bool:g_bActived_Radar
+}
+
+enum EspecialItems
+{
+	g_RG,
+	g_MJ,
+	g_ND,
+	g_CO,
+	g_IR,
+	g_IB,
+	g_WE,
+	g_BH
+}
+
+enum ShopItems
+{
+	bool:g_SK,
+	bool:g_Defuse,
+	bool:g_SG,
+	bool:g_HP,
+	bool:g_HE,
+	bool:g_Teleport,
+	bool:slowgunitem,
+	bool:slowgunset,
+	bool:sleepgunitem,
+	bool:sleepgunset
+}
+
+enum ConfigSettingsMenu
+{
+	bool:g_bFMenu,
+	bool:g_bEffect,
+	bool:g_b3D,
+	bool:g_bSkins,
+	bool:g_bStartSound,
+}
+
+enum UserFurienBases
+{
+	bool:g_bGravity,
+	bool:g_bSpeed,
+	bool:g_bWeapons
+}
+
+enum PlayerModelDatas
+{
+	g_HasCustomModel,
+	g_Human,
+	g_PlayerModel[MAX_PLAYERS]
+}
+
+new pCvars[pCvarsSettings]
+new HudSync[HudSyncSettings]
+new Menus[MenuSettings]
+
+new PlayerModelData[MAX_PLAYERS+1][PlayerModelDatas]
+new ConfigSettingMenu[MAX_PLAYERS+1][ConfigSettingsMenu]
+new UserFurienBase[MAX_PLAYERS+1][UserFurienBases]
+new ShopItem[MAX_PLAYERS+1][ShopItems]
+new SpecialItem[MAX_PLAYERS+1][EspecialItems]
+new SpecialItemActivated[MAX_PLAYERS+1][EspecialItemsActivated]
+new PrivatePlayerData[MAX_PLAYERS+1][PrivatePlayerDatas]
+
+new g_HoldingC4, g_RoundStartTime
+
+new grab[MAX_PLAYERS+1]
+new Float:grab_totaldis[MAX_PLAYERS+1]
+new bool:g_Grab[MAX_PLAYERS+1]
+
+new Float:g_fVecMins[MAX_PLAYERS+1][3]
+new Float:g_fVecMaxs[MAX_PLAYERS+1][3]
+new Float:g_fVecOrigin[MAX_PLAYERS+1][3]
+
+new AdminIndex[MAX_PLAYERS+1]
+
+new CVAR_color_Kill[3]
+
+new iTimeLimit
+
+public plugin_init()
+{
+	register_plugin(PLUGIN, "0.5.7", "EFFx/adamcszombie")
+	
+	msg_StatusIcon =	get_user_msgid("StatusIcon")
+	msg_ScreenFade =	get_user_msgid("ScreenFade")
+	msg_SayText =		get_user_msgid("SayText")
+	msg_TextMsg =		get_user_msgid("TextMsg")
+	msg_ClCorpse =		get_user_msgid("ClCorpse")
+	msg_HostagePos =	get_user_msgid("HostagePos")
+	msg_HostageK =		get_user_msgid("HostageK")
+	msg_SendAudio =		get_user_msgid("SendAudio") 
+	msg_Money =		get_user_msgid("Money")
+
+	register_dictionary("furien_gamesites.txt")
+	register_dictionary("common.txt")
+	
+	register_message(msg_StatusIcon, "message_StatusIcon")
+	register_message(msg_ClCorpse, "message_ClCorpse")
+	register_message(msg_SendAudio, "message_SendAudio") 
+	
+	RegisterHam(Ham_Spawn, "player", "ham_Player_Spawn_Post", 1)
+	RegisterHam(Ham_TakeDamage, "player", "ham_Player_TakeDamage_Post", 0)
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_knife", "fwdPrimaryAttackKnifePre", 1)
+	RegisterHam(Ham_Player_PostThink, "player", "ham_Player_PostThink_Post", 1)
+	RegisterHam(Ham_Killed, "player", "ham_Player_Killed_Pre", 0)
+	RegisterHam(Ham_Player_ResetMaxSpeed, "player", "ham_Player_ResetMaxSpeed_Post", 1)
+	RegisterHam(Ham_Player_Jump, "player", "ham_Player_Jump_Pre", 0)
+	RegisterHam(Ham_Touch, "func_wall", "ham_Touch_Pre", 0)
+	RegisterHam(Ham_Touch, "func_breakable", "ham_Touch_Pre", 0)
+	RegisterHam(Ham_Touch, "worldspawn", "ham_Touch_Pre", 0)
+	RegisterHam(Ham_Touch, "armoury_entity", "TouchWeapons", 0)
+	RegisterHam(Ham_Touch, "weapon_shield", "TouchWeapons", 0)
+	RegisterHam(Ham_Touch, "weaponbox", "TouchWeapons", 0)
+	RegisterHam(Ham_Use, "func_tank", "ham_UseStationary_Post", 1)
+	RegisterHam(Ham_Use, "func_tankmortar", "ham_UseStationary_Post", 1)
+	RegisterHam(Ham_Use, "func_tankrocket", "ham_UseStationary_Post", 1)
+	RegisterHam(Ham_Use, "func_tanklaser", "ham_UseStationary_Post", 1)
+	RegisterHam(Ham_Weapon_PrimaryAttack , "weapon_c4" , "ham_PrimaryAttack_C4")
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_tmp", "Fwd_PrimAttack", 0)
+	
+	for(new i = 1; i < sizeof WEAPONENTNAMES; i++)
+		if(WEAPONENTNAMES[i][0]) 
+			RegisterHam(Ham_Item_Deploy, WEAPONENTNAMES[i], "ham_Item_Deploy_Post", 1)
+	
+	pCvars[pCvarPlantDelay] = register_cvar("amx_plant_delay" , "45")
+	pCvars[pCvarGrabSpeed] = register_cvar("amx_grab_speed","5")
+	pCvars[pCvarFurienGrav] = register_cvar("amx_furien_grav", "0.37")
+	pCvars[pCvarFurienSpeed] = register_cvar("amx_furien_speed", "700.0")
+	pCvars[pCvarMinPlayers] = register_cvar("amx_furien_minplayers", "5")
+	pCvars[pCvarBombPlant] = register_cvar("amx_plant_bonus", "30")
+	pCvars[pCvarBombDefuse] = register_cvar("amx_defuse_bonus", "30")
+	pCvars[pCvarPrefix] = register_cvar("amx_furien_prefix", "[Furien v0.5.7]")
+	pCvars[pCvarContact] = register_cvar("amx_contact", "No contact, put it in amx_contact cvar")
+	pCvars[pCvarMotdLink] = register_cvar("amx_motd_info_link", "Link here")
+	pCvars[pCvarGameDescription] = register_cvar("amx_game_description", "[Furien v0.5.7]")
+
+	g_RoundStartTime = get_systime()
+	
+	iEnt = engfunc(EngFunc_CreateNamedEntity, engfunc(EngFunc_AllocString, "info_target"))
+	
+	if(pev_valid(iEnt))
+	{
+		set_pev(iEnt, pev_classname, g_szClassname)
+		global_get(glb_time, g_t_time)
+		set_pev(iEnt, pev_nextthink, g_t_time + 0.1)
+		register_think(g_szClassname, "think_Invisibility")
+	} 
+	else 
+	{
+		set_task(0.1, "think_Invisibility", .flags="b")
+	}
+	
+	Menus[MenuPrimary] = menu_create("Anti-Furien Menu \d|| \rPrimary", "Handler_Primary")
+	Menus[MenuSecondary] = menu_create("Anti-Furien Menu \d|| \rPistols", "Handler_Secondary")
+	
+	menu_setprop(Menus[MenuPrimary], MPROP_PERPAGE, 0)
+	
+	for(new i;i < sizeof AntiFurienPWeapons;i++)
+	{
+		menu_additem(Menus[MenuPrimary], AntiFurienPWeapons[i][szPWeaponName])
+	}
+	
+	for(new i;i < sizeof AntiFurienSWeapons;i++)
+	{
+		menu_additem(Menus[MenuSecondary], AntiFurienSWeapons[i][szSWeaponName])
+	}
+		
+	register_forward(FM_UpdateClientData, "fw_UpdateClientData_Post", 1)
+	register_forward(FM_PlaybackEvent, "fw_PlaybackEvent")	
+	register_forward(FM_AddToFullPack, "AddToFullPack", 1)
+	register_forward(FM_PlayerPreThink, "PreThink")
+	register_forward(FM_GetGameDescription, "ForwardGameDescription")
+	register_forward(FM_EmitSound, "EmitSound")
+	register_forward(FM_CmdStart, "CmdStart")
+	register_forward(FM_SetModel, "fw_SetModel")
+	register_forward(FM_SetClientKeyValue, "fw_SetClientKeyValue")
+	register_forward(FM_ClientUserInfoChanged, "fw_ClientUserInfoChanged")
+	register_forward(FM_ClientKill, "Forward_ClientKill")
+	
+	register_event("CurWeapon", "SwitchToC4" , "be" , "1=1" , "2=6")
+	register_event("CurWeapon", "SwitchToOther" , "be" , "1=1" , "2!6")
+	register_event("SendAudio", "EVENT_CTWin", "a", "1=0", "2=%!MRAD_ctwin")
+	register_event("SendAudio", "EVENT_TWin", "a", "1=0", "2=%!MRAD_terwin")
+	register_event("DeathMsg", "eDeathMsg", "a")
+	register_event("HLTV", "event_round_start", "a", "1=0", "2=0")
+	register_logevent("BombPlanted", 3, "2=Planted_The_Bomb")
+	register_logevent("BombDefused", 3, "2=Defused_The_Bomb")
+
+	register_concmd("amx_restartdata","RestartData",ADMIN_IMMUNITY,"Restart all player's money and items.")
+	
+	register_logevent("Round_Start", 2, "1=Round_Start")
+	register_logevent("Round_End", 2, "1=Round_End")
+	
+	iTimeLimit = get_cvar_pointer("mp_timelimit")
+	
+	register_clcmd("say", "handle_say")
+	register_clcmd("say_team", "handle_say") 
+	register_clcmd("+grab","grab_on")
+	register_clcmd("-grab","grab_off")
+	register_clcmd("amx_amenu","CmdAdminMenu")
+	register_clcmd("/furien", "Open_FurMenu")
+	
+	for(new i; i < sizeof HudSync; i++)
+		HudSync[HudSyncSettings:i] = CreateHudSyncObj()
+	
+	g_iMaxPlayers = get_maxplayers()
+
+	LoadCvars()
+	LoadDefaultCfgs()
+} 
+
+LoadCvars() 
+{ 
+	new szConfigFile[128]
+     
+	formatex(szConfigFile[get_configsdir(szConfigFile,charsmax(szConfigFile))],charsmax(szConfigFile),"/%s/furien_cvars.cfg", g_szFolder)
+
+	if(file_exists(szConfigFile))
+		server_cmd("exec %s",szConfigFile)
+}
+
+LoadDefaultCfgs() 
+{ 
+	new szConfigFile[128]
+     
+	formatex(szConfigFile[get_configsdir(szConfigFile,charsmax(szConfigFile))],charsmax(szConfigFile),"/%s/furien_default_cfgs.cfg", g_szFolder)
+
+	if(file_exists(szConfigFile))
+		server_cmd("exec %s",szConfigFile)
+}
+
+public plugin_precache()
+{	
+	precache_model(p_sleepgun)
+	precache_model(p_slowgun)
+	precache_model(slowgun)
+	precache_model(sleepgun)
+	
+	precache_model("models/rpgrocket.mdl")
+	
+	for(new i=0; i < sizeof g_MusicList; i++)
+		precache_generic(g_MusicList[i])
+		
+	new szFile[256]
+	get_configsdir(szFile, charsmax(szFile))
+	formatex(szFile, charsmax(szFile), "%s/%s/furien_settings.ini", szFile, g_szFolder)
+
+	new iFile = fopen(szFile, "r")
+
+	while (!feof(iFile))
+	{
+		new szBuffer[2056], Key[64], Value[256], ValueRight[256], ValueRight2[256]
+
+		fgets(iFile, szBuffer, charsmax(szBuffer))
+		trim(szBuffer)
+		
+		if (szBuffer[0] == EOS || szBuffer[0] == ';' || (szBuffer[0] == '/' && szBuffer[1] == '/'))
+			continue
+
+		strtok(szBuffer, Key, charsmax(Key), Value, charsmax(Value), '=')
+		replace(Value, charsmax(Value), ",", "")
+		
+		trim(Key)
+		trim(Value)
+		trim(ValueRight)
+
+		if(equal(Key, "MONEY_MAX")) 
+		{
+			if(Value[0])
+			{
+				KillSettings[MONEY_MAX] = str_to_num(Value)
+			}
+			else
+			{
+				KillSettings[MONEY_MAX] = 999999
+			}
+		}
+		else if(equal(Key, "MONEY_EVIP_KILL"))	
+		{
+			parse(Value, Value, charsmax(Value), ValueRight, charsmax(ValueRight))
+
+			if(Value[0])
+			{
+				KillSettings[MONEY_T_EVIP_KILL] = str_to_num(Value)
+			}
+			else
+			{
+				KillSettings[MONEY_T_EVIP_KILL] = 25
+			}
+
+			if(ValueRight[0])
+			{
+				KillSettings[MONEY_CT_EVIP_KILL] = str_to_num(ValueRight)
+			}
+			else
+			{
+				KillSettings[MONEY_CT_EVIP_KILL] = 20
+		
+			}
+		}
+		else if(equal(Key, "MONEY_VIP_KILL"))	
+		{
+			parse(Value, Value, charsmax(Value), ValueRight, charsmax(ValueRight))
+
+			if(Value[0])
+			{
+				KillSettings[MONEY_T_VIP_KILL] = str_to_num(Value)
+			}
+			else
+			{
+				KillSettings[MONEY_T_VIP_KILL] = 20
+			}
+
+			if(ValueRight[0])
+			{
+				KillSettings[MONEY_CT_VIP_KILL] = str_to_num(ValueRight)
+			}
+			else
+			{
+				KillSettings[MONEY_CT_VIP_KILL] = 15
+		
+			}
+		}
+		else if(equal(Key, "MONEY_NORMAL_KILL"))	
+		{
+			parse(Value, Value, charsmax(Value), ValueRight, charsmax(ValueRight))
+
+			if(Value[0])
+			{
+				KillSettings[MONEY_T_NORMAL_KILL] = str_to_num(Value)
+			}
+			else
+			{
+				KillSettings[MONEY_T_NORMAL_KILL] = 15
+			}
+
+			if(ValueRight[0])
+			{
+				KillSettings[MONEY_CT_NORMAL_KILL] = str_to_num(ValueRight)
+			}
+			else
+			{
+				KillSettings[MONEY_CT_NORMAL_KILL] = 10
+		
+			}
+		}
+		
+		else if(equal(Key, "V_KNIFE"))
+		{	
+			if(Value[0] || ValueRight[0])
+			{
+				parse(Value, Value, charsmax(Value), ValueRight, charsmax(ValueRight))
+				
+				if(file_exists(Value))
+				{
+					copy(WeaponSkins[V_KNIFE_T], charsmax(WeaponSkins[]), Value)
+					precache_model(Value)
+				}
+				
+				if(file_exists(ValueRight))
+				{
+					copy(WeaponSkins[V_KNIFE_CT], charsmax(WeaponSkins[]), ValueRight)
+					precache_model(ValueRight)
+				}
+			}
+			else
+			{
+				if(!Value[0])		copy(WeaponSkins[V_KNIFE_T], charsmax(WeaponSkins[]), "models/v_knife.mdl")
+				if(!ValueRight[0])	copy(WeaponSkins[V_KNIFE_CT], charsmax(WeaponSkins[]), "models/v_knife.mdl")
+			}
+		}
+			
+		else if(equal(Key, "V_HEGRENADE"))
+		{		
+			if(Value[0] || ValueRight[0] || ValueRight2[0])
+			{
+				parse
+				(
+					Value, 
+					Value, charsmax(Value), 
+					ValueRight, charsmax(ValueRight),
+					ValueRight2, charsmax(ValueRight2)
+				)
+				
+				replace(ValueRight, charsmax(ValueRight), ",", "")
+				
+				if(file_exists(Value) 
+				|| file_exists(ValueRight)
+				|| file_exists(ValueRight2))
+				{
+					copy(WeaponSkins[V_HEGRENADE_V], charsmax(WeaponSkins[]), Value)
+					copy(WeaponSkins[V_HEGRENADE_P], charsmax(WeaponSkins[]), ValueRight)
+					copy(WeaponSkins[V_HEGRENADE_W], charsmax(WeaponSkins[]), ValueRight2)
+					
+					precache_model(Value)
+					precache_model(ValueRight)
+					precache_model(ValueRight2)
+				}
+			}
+		}
+		
+		else if(equal(Key, "V_FLASHBANG"))
+		{
+			if(Value[0] || ValueRight[0] || ValueRight2[0])
+			{
+				parse
+				(
+					Value, 
+					Value, charsmax(Value), 
+					ValueRight, charsmax(ValueRight),
+					ValueRight2, charsmax(ValueRight2)
+				)
+				
+				replace(ValueRight, charsmax(ValueRight), ",", "")
+				
+				if(file_exists(Value) 
+				|| file_exists(ValueRight)
+				|| file_exists(ValueRight2))
+				{
+					copy(WeaponSkins[V_FLASHBANG_V], charsmax(WeaponSkins[]), Value)
+					copy(WeaponSkins[V_FLASHBANG_P], charsmax(WeaponSkins[]), ValueRight)
+					copy(WeaponSkins[V_FLASHBANG_W], charsmax(WeaponSkins[]), ValueRight2)
+					
+					precache_model(Value)
+					precache_model(ValueRight)
+					precache_model(ValueRight2)
+				}
+			}
+		}
+		
+		else if(equal(Key, "V_SMOKEGRENADE"))
+		{		
+			if(Value[0] || ValueRight[0] || ValueRight2[0])
+			{
+				parse
+				(
+					Value, 
+					Value, charsmax(Value), 
+					ValueRight, charsmax(ValueRight),
+					ValueRight2, charsmax(ValueRight2)
+				)
+				
+				replace(ValueRight, charsmax(ValueRight), ",", "")
+				
+				if(file_exists(Value) 
+				|| file_exists(ValueRight)
+				|| file_exists(ValueRight2))
+				{
+					copy(WeaponSkins[V_SMOKEGRENADE_V], charsmax(WeaponSkins[]), Value)
+					copy(WeaponSkins[V_SMOKEGRENADE_P], charsmax(WeaponSkins[]), ValueRight)
+					copy(WeaponSkins[V_SMOKEGRENADE_W], charsmax(WeaponSkins[]), ValueRight2)
+					
+					precache_model(Value)
+					precache_model(ValueRight)
+					precache_model(ValueRight2)
+				}
+			}
+		}
+
+		else if(equal(Key, "VIP_MODELS"))
+		{
+			if(Value[0] || ValueRight[0])
+			{
+				parse
+				(
+					Value, 
+					Value, charsmax(Value), 
+					ValueRight, charsmax(ValueRight)
+				)
+				
+				replace(ValueRight, charsmax(ValueRight), ",", "")
+				
+				if(file_exists(Value) 
+				|| file_exists(ValueRight))
+				{
+					copy(PlayersSkins[FurienModel], charsmax(PlayersSkins[]), Value)
+					copy(PlayersSkins[AntiModel], charsmax(PlayersSkins[]), ValueRight)
+					
+					precache_model(Value)
+					precache_model(ValueRight)
+	
+					formatex(Value, charsmax(Value), "models/player/%s/%sT.mdl", Value, Value)
+					formatex(ValueRight, charsmax(ValueRight), "models/player/%s/%sT.mdl", ValueRight, ValueRight)
+				
+					if(file_exists(Value) 
+					|| file_exists(ValueRight))
+					{
+						precache_model(Value)
+						precache_model(ValueRight)
+					}
+				}
+			}
+		}
+		
+		if(file_exists(Value))
+		{
+			if(Value[0])
+			{
+				if(equal(Key, "V_M4A1"))
+				{
+					copy(WeaponSkins[V_M4A1], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_AK47"))
+				{
+					copy(WeaponSkins[V_AK47], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_AWP"))
+				{
+					copy(WeaponSkins[V_AWP], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_FAMAS"))
+				{
+					copy(WeaponSkins[V_FAMAS], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_M249"))
+				{
+					copy(WeaponSkins[V_M249], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_MP5"))
+				{
+					copy(WeaponSkins[V_MP5], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_UMP45"))
+				{
+					copy(WeaponSkins[V_UMP45], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_M3"))
+				{
+					copy(WeaponSkins[V_M3], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_C4"))
+				{
+					copy(WeaponSkins[V_C4], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_DEAGLE"))
+				{
+					copy(WeaponSkins[V_DEAGLE], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_GLOCK18"))
+				{
+					copy(WeaponSkins[V_GLOCK18], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_USP"))
+				{
+					copy(WeaponSkins[V_USP], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_ELITE"))
+				{
+					copy(WeaponSkins[V_ELITE], charsmax(WeaponSkins[]), Value)
+				}
+				else if(equal(Key, "V_FIVESEVEN"))
+				{
+					copy(WeaponSkins[V_FIVESEVEN], charsmax(WeaponSkins[]), Value)
+				}
+	
+				precache_model(Value)
+			}
+		}
+	}
+	fclose(iFile)
+	
+	for(new i = 0; i < sizeof Knives; i++)
+		precache_model(Knives[i])
+
+	for(new i = 0; i < sizeof Kills_Sounds; i++)
+		precache_sound(Kills_Sounds[i])
+		
+	for(new i = 0; i < sizeof g_szTer_Sounds; i++)
+		precache_generic(g_szTer_Sounds[i])
+		
+	for(new i = 0; i < sizeof g_szCt_Sounds; i++)
+		precache_generic(g_szCt_Sounds[i])
+		
+	for(new i = 0; i < sizeof CombaSounds; i++)
+		precache_sound(CombaSounds[i])
+		
+	for(new i = 0; i < sizeof SilverSounds; i++)
+		precache_sound(SilverSounds[i])
+		
+	for(new i = 0; i < sizeof EpicSounds; i++)
+		precache_sound(EpicSounds[i])
+		
+	for(new i = 0; i < sizeof DeadSounds; i++)
+		precache_sound(DeadSounds[i])
+		
+	for(new i = 0; i < sizeof SpiritSounds; i++)
+		precache_sound(SpiritSounds[i])
+		
+	for(new i = 0; i < sizeof SuperSounds; i++)
+		precache_sound(SuperSounds[i])
+		
+	for(new i = 0; i < sizeof AxeSounds ; i++)
+		precache_sound(AxeSounds[i])
+		
+	for(new i = 0; i < sizeof HunterSounds; i++)
+		precache_sound(HunterSounds[i])
+		
+	for(new i = 0; i < sizeof CrowSounds; i++)
+		precache_sound(CrowSounds[i])
+		
+	precache_sound(SleepGun_Sounds)
+	precache_sound(SlowGun_Sounds)
+	precache_sound(ItemBoughtSound)
+	precache_sound(SpecialItemBoughtSound)
+}
+
+public plugin_end()
+{
+	nvault_close(g_nVaultSaves)
+}
+
+public plugin_cfg()
+{
+	set_pcvar_num(iTimeLimit,0)
+	
+	g_nVaultSaves = nvault_open("fur_nvault")
+	
+	server_cmd("amx_pausecfg add ^"%s^"",PLUGIN)
+	
+	if(g_nVaultSaves == INVALID_HANDLE)
+		set_fail_state("Error opening Furien nVault, file does not exist!")
+}
+
+public plugin_natives()
+{
+	register_library("furien_gs")
+
+	register_native("fm_get_user_item", "_fm_get_user_item", 1)
+	register_native("fm_set_user_item", "_fm_set_user_item", 1)
+	register_native("fm_get_user_knife", "_fm_get_user_knife", 1)
+	register_native("fm_set_user_knife", "_fm_set_user_knife", 1)
+	register_native("set_user_money", "_fm_set_user_money")
+	register_native("get_user_money", "_fm_get_user_money")
+}
+
+public _fm_get_user_item()
+{
+	return g_szItem[get_param(1)][TOTAL_ITEMS]
+}
+
+public _fm_set_user_item()
+{
+	g_szItem[get_param(1)][TOTAL_ITEMS] = get_param(2)
+}
+
+public _fm_get_user_knife()
+{
+	return g_szKnife[get_param(1)][TOTAL_KNIVES]
+}
+
+public _fm_set_user_knife()
+{
+	new id = get_param(1)
+
+	g_szKnife[id][TOTAL_KNIVES] = get_param(2)
+	
+	new weapon_ent; weapon_ent = fm_cs_get_current_weapon_ent(id)
+	
+	if(pev_valid(weapon_ent))
+		replace_weapon_models(id, cs_get_weapon_id(weapon_ent))
+}
+
+public _fm_set_user_money()
+{
+	new id = get_param(1)
+	new iType = get_param(2)
+	new iValue = get_param(3)
+
+	switch(iType)
+	{
+		case 0:
+		{
+			PrivatePlayerData[id][g_PlayerMoney] += iValue
+		}
+		default:
+		{
+			PrivatePlayerData[id][g_PlayerMoney] -= iValue
+		}
+	}
+	cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney], 1)
+}
+
+public _fm_get_user_money()
+{
+	return PrivatePlayerData[get_param(1)][g_PlayerMoney]
+}
+
+public Msg(id)
+{
+	client_print(id-2016, print_chat,"%L", id, "PLAYER_CONNECT_MSG")
+}
+
+public reset_score(id)
+{	
+	set_user_frags(id, 0)
+	cs_set_user_deaths(id, 0)
+	set_user_frags(id, 0)
+	cs_set_user_deaths(id, 0)
+
+	color_chat(id, "%L", id, "CHAT_SCORE_RESETED")
+	return PLUGIN_HANDLED
+}
+
+public client_putinserver(id)
+{
+	if(is_user_bot(id))
+		return
+		
+	PrivatePlayerData[id][g_bIsConnected] = true
+	PrivatePlayerData[id][g_MyKillCount] = 0
+	PrivatePlayerData[id][g_bCantSay] = true
+
+	get_user_name(id,PrivatePlayerData[id][g_szName],charsmax(PrivatePlayerData[]))
+	
+	if(get_playersnum() >= 10)
+	{
+		set_pcvar_num(iTimeLimit,60)	
+	}
+	
+	set_task(10.5,"Msg", id+2016)
+	
+	g_Grab[id] = false
+	grab[id] = false
+	
+	SpecialItemActivated[id][g_bActived_Immor] = false
+	SpecialItemActivated[id][g_bActived_GodMode] = false
+	SpecialItemActivated[id][g_bActived_Hit] = false
+	SpecialItemActivated[id][g_bActived_Speed] = false
+	SpecialItemActivated[id][g_bActived_Radar] = false
+	SpecialItemActivated[id][g_bActived_Wallhang] = false
+	SpecialItemActivated[id][g_bActived_Hanged] = false
+	
+	ConfigSettingMenu[id][g_bFMenu] = true
+	ConfigSettingMenu[id][g_bEffect] = true
+	ConfigSettingMenu[id][g_bSkins] = true
+	ConfigSettingMenu[id][g_bStartSound] = false
+	ConfigSettingMenu[id][g_b3D] = false
+	
+	UserFurienBase[id][g_bGravity] = true
+	UserFurienBase[id][g_bSpeed] = true
+	
+	g_szKnife[id][TOTAL_KNIVES] = KNIFE_DEFAULT
+
+	LoadData(id)
+}
+
+public client_disconnect(id)
+{
+	PrivatePlayerData[id][g_bIsConnected] = false
+	
+	if(get_playersnum() <= 9)
+	{
+		set_pcvar_num(iTimeLimit,0)
+	}
+	
+	if(task_exists(id+TASK_SHOW_RADAR))
+		remove_task(id+TASK_SHOW_RADAR)
+		
+	if(task_exists(id+TASK_IMMOR))
+		remove_task(id+TASK_IMMOR)
+		
+	if(task_exists(id+TASK_RADAR))
+		remove_task(id+TASK_RADAR)
+		
+	if(task_exists(id+TASK_REMOVE_RADAR))
+		remove_task(id+TASK_REMOVE_RADAR)
+		
+	if(task_exists(id+TASK_HUD_SPECIAL_ITEM))
+		remove_task(id+TASK_HUD_SPECIAL_ITEM)
+		
+	if(task_exists(id+TASK_C4))
+		remove_task(id+TASK_C4)
+
+	SaveData(id)
+}
+
+public client_authorized(id)
+{
+	get_user_authid(id, PrivatePlayerData[id][g_szAuthID], charsmax(PrivatePlayerData[]))
+}
+
+public client_infochanged(id)
+{
+	get_user_info(id,"name",PrivatePlayerData[id][g_szName],charsmax(PrivatePlayerData[]))
+}
+
+public event_round_start()
+{
+	g_bRoundEnd = false
+	g_roundstarttime = get_gametime()
+}
+public ham_Player_Spawn_Post(id)
+{
+	if(!is_user_alive(id))
+		return HAM_IGNORED
+		
+	set_task(2.0,"ShowInfo",id+TASK_SHOW_INFO)
+	set_task(2.5,"ShowBestMoney",id+TASK_SHOW_BEST_MONEY)
+
+	static CsTeams:team; team = cs_get_user_team(id)
+	static weapon_ent; weapon_ent = fm_cs_get_current_weapon_ent(id)
+	
+	if(pev_valid(weapon_ent))
+		replace_weapon_models(id, cs_get_weapon_id(weapon_ent))
+		
+	set_user_rendering(id, kRenderFxNone, 0, 0, 0, kRenderNormal, 0)
+	
+	PrivatePlayerData[id][g_MyKillCount] = 0
+	PrivatePlayerData[id][g_bCantSay] = false
+	PrivatePlayerData[id][g_bSlashing] = false
+	PrivatePlayerData[id][g_bSkinSelected] = false
+	
+	SpecialItemActivated[id][g_bActived_Hanged] = false
+	SpecialItemActivated[id][g_bActived_Immor] = false
+	SpecialItemActivated[id][g_bActived_GodMode] = false
+	SpecialItemActivated[id][g_bActived_Speed] = false
+	SpecialItemActivated[id][g_bActived_Wallhang] = false
+	SpecialItemActivated[id][g_bActived_Radar] = false
+	
+	UserFurienBase[id][g_bWeapons] = false
+	
+	ConfigSettingMenu[id][g_b3D] = false
+	set_view(id,CAMERA_NONE)
+	
+	ShopItem[id][g_HE] = false
+	ShopItem[id][g_HP] = false
+	ShopItem[id][g_Defuse] = false
+	ShopItem[id][g_SG] = false
+	ShopItem[id][g_Teleport] = false
+	ShopItem[id][g_SK] = false
+	ShopItem[id][sleepgunitem] = false
+	ShopItem[id][slowgunitem] = false
+
+	remove_task(id+TASK_IMMOR)
+	remove_task(id+TASK_RADAR)
+	remove_task(id+TASK_SHOW_RADAR)
+
+	strip_user_weapons(id)
+	
+	new iUserFlags = get_user_flags(id)
+	
+	switch(team)
+	{
+		case CS_TEAM_T:
+		{
+			if(g_szItem[id][TOTAL_ITEMS] == ITEM_IMMOBILIZE 
+			|| g_szItem[id][TOTAL_ITEMS] == ITEM_WISE_EYE 
+			|| g_szItem[id][TOTAL_ITEMS] == ITEM_BUNNYHOP)
+			{
+				g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+			}
+			
+			give_item(id, "weapon_knife")
+			give_item(id, "weapon_hegrenade")
+			
+			set_user_armor(id,0)
+			
+			set_user_footsteps(id, 1)
+				
+			if(iUserFlags & ADMIN_SVIP)
+			{
+				new iGetUserHealth = pev(id, pev_health)
+				fm_set_user_health(id, iGetUserHealth + 20)
+					
+				SpecialItemActivated[id][g_bActived_SetWallHang] = true
+					
+				give_item(id, "weapon_smokegrenade")
+					
+				if(get_playersnum() >= get_pcvar_num(pCvars[pCvarMinPlayers]))
+				{	
+					give_user_weapon(id, CSW_TMP, 10, 0)
+					ShopItem[id][sleepgunset] = true
+					ShopItem[id][slowgunset] = false
+				}
+			}
+			else if(iUserFlags & ADMIN_VIP)
+			{
+				new iGetUserHealth = pev(id, pev_health)
+				fm_set_user_health(id, iGetUserHealth + 10)
+					
+				give_item(id, "weapon_smokegrenade")
+			}
+			else
+			{
+				new szUserModel[15]
+				cs_get_user_model(id, szUserModel, charsmax(szUserModel))
+
+				if(equal(szUserModel, "arctic"))
+				{
+					cs_set_user_model(id,ModelsT[0])
+				}
+				else if(equal(szUserModel, "leet"))
+				{
+					cs_set_user_model(id,ModelsT[1])
+				}
+			}
+				
+			switch(g_szKnife[id][TOTAL_KNIVES])
+			{
+				case KNIFE_COMBAT:
+				{
+					fm_set_user_armor(id, pev(id, pev_armorvalue) + 10)
+				}
+				case KNIFE_AXE:
+				{
+					fm_set_user_health(id, pev(id, pev_health) + 20)
+				}
+				case KNIFE_SILVER:
+				{
+					fm_set_user_health(id, pev(id, pev_health) + 10)
+				}
+				case KNIFE_SPIRIT:
+				{
+					fm_set_user_health(id, pev(id, pev_health) + 5)
+				}
+				case KNIFE_CROWBAR:
+				{
+					fm_set_user_health(id, pev(id, pev_health) + 10)
+				}
+			}
+			if(UserFurienBase[id][g_bGravity])
+			{
+				fm_set_user_grav(id, get_pcvar_float(_:pCvars[pCvarFurienGrav]))
+			}
+		}
+		case CS_TEAM_CT:
+		{		
+			SpecialItemActivated[id][g_bActived_SetWallHang] = false
+			
+			if(g_szItem[id][TOTAL_ITEMS] == ITEM_NO_DAMAGE 
+			|| g_szItem[id][TOTAL_ITEMS] == ITEM_CONFUSED 
+			|| g_szItem[id][TOTAL_ITEMS] == ITEM_IMMORTALITY)
+			{
+				g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+			}
+			
+			if(iUserFlags & ADMIN_SVIP)
+			{
+				cs_set_user_armor(id,100,CsArmorType:2)
+					
+				if(get_playersnum() >= get_pcvar_num(pCvars[pCvarMinPlayers]))
+				{
+					give_user_weapon(id, CSW_TMP, 10, 0)
+					ShopItem[id][slowgunset] = true
+					ShopItem[id][sleepgunset] = false
+				}
+			}
+			else if(iUserFlags & ADMIN_VIP)
+			{
+				cs_set_user_armor(id,50,CsArmorType:2)
+			}
+			else
+			{
+
+				new szUserModel[15]
+				cs_get_user_model(id, szUserModel, charsmax(szUserModel))
+
+				if(equal(szUserModel, "sas"))
+				{
+					cs_set_user_model(id,ModelsCT[0])
+				}
+				else if(equal(szUserModel, "gsg9"))
+				{
+					cs_set_user_model(id,ModelsCT[1])
+				}
+			}
+			
+			give_item(id, "weapon_knife")
+			
+			fm_set_user_grav(id, 1.0)
+			set_user_footsteps(id, 0)
+		}
+	}
+	
+	client_cmd(id,"weapon_knife")
+	Open_FurMenu(id)
+	
+	cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+		
+	if((iUserFlags & ADMIN_SVIP) || (iUserFlags & ADMIN_VIP))
+	{	
+		if(team == CS_TEAM_T)
+		{
+			cs_set_user_model(id,!RoundEnd ? PlayersSkins[FurienModel] : PlayersSkins[AntiModel])
+			PlayerModelData[id][g_Human] = true
+		}
+		
+		else
+		{
+			cs_set_user_model(id,!RoundEnd ? PlayersSkins[AntiModel] : PlayersSkins[FurienModel])
+			PlayerModelData[id][g_Human] = false
+		}
+    
+		remove_task(id+MODELSET_TASK)
+    
+		copy(PlayerModelData[id][g_PlayerModel], charsmax(PlayerModelData[]), !PlayerModelData[id][g_Human] ? PlayersSkins[AntiModel] : PlayersSkins[FurienModel])
+		
+		new currentmodel[MAX_PLAYERS]
+		fm_get_user_model(id, currentmodel, charsmax(currentmodel))
+		
+		if(!equal(currentmodel, PlayerModelData[id][g_PlayerModel]))
+		{
+			if(get_gametime() - g_roundstarttime < 5.0)
+			{
+				set_task(3.0 * MODELCHANGE_DELAY, "fm_user_model_update", id + MODELSET_TASK)
+			}
+			else
+				fm_user_model_update(id + MODELSET_TASK)
+		}
+	}
+	return HAM_IGNORED
+}
+
+public fw_SetClientKeyValue(id, const infobuffer[], const key[])
+{   
+	if(equal(key, "model"))
+	{
+		if(PlayerModelData[id][g_HasCustomModel])
+			return FMRES_SUPERCEDE
+	}
+	return FMRES_IGNORED
+}
+
+public fw_ClientUserInfoChanged(id)
+{
+	if(!PlayerModelData[id][g_HasCustomModel])
+		return FMRES_IGNORED
+    
+	static currentmodel[MAX_PLAYERS]
+	fm_get_user_model(id, currentmodel, charsmax(currentmodel))
+    
+	if(!equal(currentmodel, PlayerModelData[id][g_PlayerModel]) && !task_exists(id + MODELSET_TASK))
+		fm_set_user_model(id + MODELSET_TASK)
+    
+	return FMRES_IGNORED
+}
+
+public fm_user_model_update(taskid)
+{
+	static Float:current_time
+	current_time = get_gametime()
+
+	if(current_time - g_models_targettime >= MODELCHANGE_DELAY)
+	{ 
+		fm_set_user_model(taskid)
+		g_models_targettime = current_time
+	}
+	else
+	{
+		set_task((g_models_targettime + MODELCHANGE_DELAY) - current_time, "fm_set_user_model", taskid)
+		g_models_targettime = g_models_targettime + MODELCHANGE_DELAY
+	}
+}
+
+public fm_set_user_model(player)
+{
+	player -= MODELSET_TASK
+	
+	RoundEnd = false
+	
+	engfunc(EngFunc_SetClientKeyValue, player, engfunc(EngFunc_GetInfoKeyBuffer, player), "model", PlayerModelData[player][g_PlayerModel])
+
+	PlayerModelData[player][g_HasCustomModel] = true
+}
+
+public Forward_ClientKill(id)
+{
+	if(!is_user_alive(id))
+		return FMRES_IGNORED
+
+	client_print(id, print_chat, "[AMXX] Don't even think about it!")
+	client_print(id, print_console, "[AMXX] Don't even think about it!")
+ 	return FMRES_SUPERCEDE
+}  
+
+public ham_Player_TakeDamage_Post(iVictim, iInfictor, iAttacker, Float:fDamage, iDmgBits)
+{
+	if(!is_user_connected(iVictim) || !is_user_connected(iAttacker) || iVictim == iAttacker)
+		return HAM_IGNORED
+		
+	new iWeapon = get_user_weapon(iAttacker)
+	
+	if(g_szItem[iVictim][TOTAL_ITEMS] == ITEM_IMMORTALITY)
+	{
+		SetHamReturnInteger(0)
+		return HAM_SUPERCEDE
+	}
+	
+	if(g_szItem[iAttacker][TOTAL_ITEMS] == ITEM_WISE_EYE)
+	{
+		if(!task_exists(iVictim))
+		{
+			SpecialItemActivated[iVictim][g_bActived_Hit] = true
+			set_task(0.5, "Task_ResetModel", iVictim)
+		}
+	}
+	
+	switch(cs_get_user_team(iAttacker))
+	{
+		case CS_TEAM_T:
+		{
+			if(ShopItem[iAttacker][g_SK])
+			{
+				if(iWeapon == CSW_KNIFE && iDmgBits != DMG_NADE)
+				{
+					SetHamParamFloat(4, 400.0)
+				}
+			}
+			
+			if(!ShopItem[iAttacker][g_SK])
+			{
+				switch(g_szKnife[iAttacker][TOTAL_KNIVES])
+				{	
+					case KNIFE_HUNTER:
+					{
+						if(iWeapon == CSW_KNIFE && iDmgBits != DMG_NADE)
+						{
+							SetHamParamFloat(4, fDamage + 20)
+						}
+					}
+					
+					case KNIFE_SPIRIT:
+					{
+						if(iWeapon == CSW_KNIFE && iDmgBits != DMG_NADE)
+						{
+							SetHamParamFloat(4, fDamage + 5)
+						}
+					}
+					
+					case KNIFE_CROWBAR:
+					{
+						if(iWeapon == CSW_KNIFE && iDmgBits != DMG_NADE)
+						{
+							SetHamParamFloat(4, fDamage + 10)
+						}
+					}
+					case KNIFE_DEAD:
+					{
+						if(cs_get_user_team(iVictim) == CS_TEAM_CT && iDmgBits != DMG_NADE)
+						{
+							fm_set_user_health(iAttacker, pev(iAttacker, pev_health) + 2)
+						}
+					}
+				}
+			}
+		
+			if(IsPrimaryWeapon(iWeapon))
+			{
+				if(ShopItem[iAttacker][sleepgunset])
+				{
+					if(get_user_weapon(iAttacker) == CSW_TMP 
+					&& cs_get_user_team(iAttacker) != cs_get_user_team(iVictim)
+					&& iDmgBits != DMG_NADE)
+					{
+						SetHamParamFloat(4,0.0)
+
+						client_print(iVictim, print_center,"%L", iVictim, "PLAYER_BLINDED", PrivatePlayerData[iAttacker][g_szName])
+						client_print(iAttacker, print_center,"%L", iAttacker, "PLAYER_BLINDER",PrivatePlayerData[iVictim][g_szName])
+		
+						ScreenFade(iAttacker, 4500, 0, 0, 255, 255, 255, 75)
+						
+						new HoldTime = floatround(4096.0 * 3.0), FadeType = HoldTime
+						ScreenFade(iVictim, HoldTime, FadeType, 4096, 0, 0, 0, 255)
+					}
+				}
+			}
+		}
+		
+		case CS_TEAM_CT:
+		{
+			switch(iWeapon)
+			{
+				case CSW_M3:
+				{
+					SetHamParamFloat(4, fDamage * 0.45)
+				}
+				case CSW_UMP45:
+				{
+					SetHamParamFloat(4, fDamage * 0.45)
+				}
+				case CSW_GLOCK18:
+				{
+					SetHamParamFloat(4, fDamage * 0.35)
+				}
+			}
+			
+			switch(g_szItem[iVictim][TOTAL_ITEMS])
+			{
+				case ITEM_NO_DAMAGE:
+				{
+					new random = random_num(1,5)
+					if(random == 2)
+						SetHamParamFloat(4, fDamage - fDamage)
+				}
+				case ITEM_CONFUSED:
+				{
+					if(PrivatePlayerData[iVictim][g_bSlashing])
+					{
+						if(IsPrimaryWeapon(iWeapon) || IsSecondaryWeapon(iWeapon))
+						{
+							SetHamParamFloat(4, fDamage * 0.5)
+						}
+					}
+				}
+			}
+			
+			if(g_szKnife[iVictim][TOTAL_KNIVES] == KNIFE_EPIC && !ShopItem[iVictim][g_SK])
+			{
+				if(IsPrimaryWeapon(iWeapon) || IsSecondaryWeapon(iWeapon))
+				{
+					new random = random_num(1,10)
+					if(random == 5)
+					{
+						SetHamParamFloat(4, fDamage - fDamage)
+					}
+				}
+			}
+			if(g_szItem[iAttacker][TOTAL_ITEMS] == ITEM_IMMOBILIZE)
+			{
+				if(iDmgBits & DMG_BULLET || iDmgBits & DMG_NADE || iDmgBits & DMG_SLASH 
+				&& cs_get_user_team(iAttacker) != cs_get_user_team(iVictim))
+				{
+					new random = random_num(1,5)
+					if(random == 2)
+					{
+						set_pev(iVictim, pev_flags, pev(iVictim, pev_flags) | FL_FROZEN)
+
+						if(!task_exists(iVictim+TASK_IMMOBILIZE))
+							set_task(3.0, "remove_frozen", iVictim+TASK_IMMOBILIZE)
+					}
+				}
+			}
+			if(IsPrimaryWeapon(iWeapon))
+			{
+				if(ShopItem[iAttacker][slowgunset])
+				{
+					if(get_user_weapon(iAttacker) == CSW_TMP 
+					&& cs_get_user_team(iAttacker) != cs_get_user_team(iVictim)
+					&& iDmgBits != DMG_NADE)
+					{
+						SetHamParamFloat(4,0.0)
+			
+						PrivatePlayerData[iVictim][g_bFreezedBySlowG] = true
+			
+						client_print(iVictim, print_center,"%L",iVictim, "PLAYER_FREEZED",PrivatePlayerData[iAttacker][g_szName])
+						client_print(iAttacker, print_center,"%L", iAttacker, "PLAYER_FREEZER", PrivatePlayerData[iVictim][g_szName])
+						
+						ScreenFade(iAttacker, 4500, 0, 0, 255, 255, 255, 75)
+			
+						remove_task(TASK_REMOVE_FREEZE+iVictim)
+						set_task(3.0,"task_remove_freeze",TASK_REMOVE_FREEZE+iVictim)
+					}
+				}
+			}
+		}
+	}
+	
+	return HAM_IGNORED
+}
+public Fwd_PrimAttack(iEnt)
+{
+	new pPlayer = get_pdata_cbase(iEnt, 41, 4)
+
+	set_pdata_float(iEnt, m_flNextPrimaryAttack, 3.0, 4)
+	set_pdata_float(pPlayer, m_flNextAttack, 3.0)
+}
+
+public task_remove_freeze(taskid)
+{
+	new id = taskid-TASK_REMOVE_FREEZE
+	if(cs_get_user_team(id) == CS_TEAM_T)
+	{
+		fm_set_user_maxspeed(id, get_pcvar_float(_:pCvars[pCvarFurienSpeed]))
+		set_user_gravity(id, get_pcvar_float(_:pCvars[pCvarFurienGrav]))
+		
+		PrivatePlayerData[id][g_bFreezedBySlowG] = false
+	}
+}
+
+public fwdPrimaryAttackKnifePre(ent)
+{
+	new id = get_pdata_cbase(ent, m_pPlayer, OFFSET_LINUX_WEAPONS)
+	
+	if(!is_user_connected(id))
+		return HAM_IGNORED
+		
+	if(g_szItem[id][TOTAL_ITEMS] == ITEM_CONFUSED)
+		PrivatePlayerData[id][g_bSlashing] = true
+		
+	return HAM_IGNORED
+}
+
+public remove_frozen(iVictim)
+{
+	iVictim -= TASK_IMMOBILIZE
+
+	set_pev(iVictim, pev_flags, pev(iVictim, pev_flags) & ~FL_FROZEN)
+}
+public EVENT_CTWin() 
+{
+	new iPlayers[MAX_PLAYERS], iNum, id
+	get_players(iPlayers, iNum)
+	for(new i;i < iNum;i++)
+	{
+		id = iPlayers[i]
+		
+		if(!ConfigSettingMenu[id][g_bStartSound])
+		{
+			client_cmd(id, "mp3 stop")
+			new buffer = belo_random(sizeof g_szCt_Sounds)
+			client_cmd(id, "mp3 play %s", g_szCt_Sounds[buffer])
+		}
+
+		if(isTeam(id))
+		{
+			cs_set_user_team(id, cs_get_user_team(id) == CS_TEAM_CT ? CS_TEAM_T : CS_TEAM_CT)
+			set_pev(id,pev_takedamage,DAMAGE_NO)
+		}
+	}
+
+	if(!task_exists(TASK_HUD))
+		set_task(0.1,"ShowHudAF",TASK_HUD, .flags = "a",.repeat = 36)
+
+	RoundsCount = 0
+	
+	RoundEnd = true
+}
+public EVENT_TWin()
+{
+	RoundsCount++
+
+	new iPlayers[MAX_PLAYERS], iNum, id
+	get_players(iPlayers, iNum)
+	for(new i;i < iNum;i++)
+	{
+		id = iPlayers[i]
+		
+		if(!ConfigSettingMenu[id][g_bStartSound])
+		{
+			client_cmd(id, "mp3 stop")
+			new buffer = belo_random(sizeof g_szTer_Sounds)
+			client_cmd(id, "mp3 play %s", g_szTer_Sounds[buffer])
+		}
+	
+		if(RoundsCount >= 3)
+		{
+			if(isTeam(id))
+			{
+				cs_set_user_team(id, cs_get_user_team(id) == CS_TEAM_CT ? CS_TEAM_T : CS_TEAM_CT)
+				set_pev(id,pev_takedamage,DAMAGE_NO)
+			}
+		}
+	}
+
+	if(!task_exists(TASK_HUD))
+		set_task(0.1,"ShowHudF",TASK_HUD, .flags = "a",.repeat = 36)
+
+	RoundEnd = true
+}
+
+public ShowHudAF()
+{
+	if(g_bIsTrue)
+	{
+		g_bIsTrue = false
+		set_hudmessage(0, 255, 0, -1.0, 0.26, 0, 0.1, 0.2, 0.0, 0.0, 0)
+	}
+	else
+	{
+		g_bIsTrue = true
+		set_hudmessage(0, 100, 255, -1.0, 0.26, 0, 0.1, 0.2, 0.0, 0.0, 0)
+	}
+	
+	ShowSyncHudMsg(0,HudSync[hudCTWin],"%L", LANG_PLAYER, "HUD_CT_WIN_MESSAGE")
+}
+public ShowHudF()
+{
+	new szHud[60]
+	
+	if(g_bIsTrue)
+	{
+		g_bIsTrue = false
+		set_hudmessage(255, 20, 255, -1.0, 0.26, 0, 0.1, 0.2, 0.0, 0.0, 0)
+	}
+	else
+	{
+		g_bIsTrue = true
+		set_hudmessage(255, 255, 20, -1.0, 0.26, 0, 0.1, 0.2, 0.0, 0.0, 0)
+	}
+	switch(RoundsCount)
+	{
+		case 1, 2:	formatex(szHud,charsmax(szHud),"%L", LANG_PLAYER, "HUD_T_WIN_MESSAGE",RoundsCount)
+		case 3:		formatex(szHud,charsmax(szHud),"%L", LANG_PLAYER, "HUD_T_WIN_SWITCH_MESSAGE")
+	}
+	ShowSyncHudMsg(0,HudSync[hudTWin],szHud)
+}
+
+public ham_Player_Killed_Pre(iVictim, iKiller, iShouldGib)
+{
+	if(!is_user_connected(iVictim) || !is_user_connected(iKiller) || iVictim == iKiller)
+		return HAM_IGNORED
+	
+	if(task_exists(iVictim+TASK_RADAR))
+		remove_task(iVictim+TASK_RADAR)
+		
+	if(task_exists(iVictim+TASK_IMMOR))
+		remove_task(iVictim+TASK_IMMOR)
+		
+	if(task_exists(iVictim+TASK_REGEN))
+		remove_task(iVictim+TASK_REGEN)
+		
+	if(task_exists(iVictim+TASK_REMOVE_FREEZE))
+		remove_task(iVictim+TASK_REMOVE_FREEZE)
+		
+	if(task_exists(iVictim+TASK_SHOW_RADAR))
+		remove_task(iVictim+TASK_SHOW_RADAR)
+
+	if(task_exists(iVictim+TASK_IMMOBILIZE))
+		remove_task(iVictim+TASK_IMMOBILIZE)
+	
+	if(task_exists(iVictim+TASK_C4))
+		remove_task(iVictim+TASK_C4)
+		
+	set_task(0.2, "HUD", iVictim+TASK_HUD_SPECIAL_ITEM, .flags = "b")
+		
+	ShopItem[iVictim][g_SK] = false
+
+	SpecialItemActivated[iVictim][g_bActived_Radar] = false
+	SpecialItemActivated[iVictim][g_bActived_Wallhang] = false
+	SpecialItemActivated[iVictim][g_bActived_Hanged] = false
+		
+	static KillText[50], KillTextCT[50]
+
+	if(ConfigSettingMenu[iKiller][g_bEffect])
+	{
+		new CsTeams:userTeam = cs_get_user_team(iKiller), R, G, B
+
+		PrivatePlayerData[iKiller][g_MyKillCount]++
+			
+		if(userTeam == CS_TEAM_CT)
+		{
+			if(IsHeadShot(iVictim) || PrivatePlayerData[iKiller][g_MyKillCount] == 6)
+			{
+				if(IsHeadShot(iVictim))
+				{
+					formatex(KillTextCT, charsmax(KillTextCT), "HEAD SHOT")
+					client_cmd(iKiller, "spk %s", Kills_Sounds[8])
+				}
+				
+				else
+				{
+					formatex(KillTextCT, charsmax(KillTextCT), "!!! CRAZY %s !!!",PrivatePlayerData[iKiller][g_szName])
+					client_cmd(iKiller, "spk %s", Kills_Sounds[7])
+				}
+				
+				R = 0, G = 100, B = 255
+				
+				set_dhudmessage(R, G, B, -1.0, IsHeadShot(iVictim) ? 0.10 : 0.30, 0, 3.0, IsHeadShot(iVictim) ? 1.0 : 4.0)
+				show_dhudmessage(0,KillTextCT)
+			}
+			
+			CVAR_color_Kill[0] = 000
+			CVAR_color_Kill[1] = 100
+			CVAR_color_Kill[2] = 200
+						
+			ScreenFade(iKiller, (400 * 14), 0, 0, CVAR_color_Kill[0], CVAR_color_Kill[1], CVAR_color_Kill[2], 75)
+		}
+		else
+		{
+			R = 110, G = 15, B = 15
+			
+			client_cmd(iKiller, "spk %s", Kills_Sounds[PrivatePlayerData[iKiller][g_MyKillCount] - 1])
+
+			switch(PrivatePlayerData[iKiller][g_MyKillCount])
+			{
+				case 1..5:	formatex(KillText, sizeof(KillText), "%s",Kill_Messages[PrivatePlayerData[iKiller][g_MyKillCount]])
+				case 6:		formatex(KillText, sizeof(KillText), "!!! %s MONSTER KILL !!!",PrivatePlayerData[iKiller][g_szName])
+				case 7..16:	formatex(KillText, sizeof(KillText), "GOT IT")
+			}
+			
+			set_dhudmessage(R, G, B, -1.0, (PrivatePlayerData[iKiller][g_MyKillCount] < 6) ? 0.30 : 0.10, 0, 3.0, (PrivatePlayerData[iKiller][g_MyKillCount] < 6) ? 1.0 : 4.0)
+			show_dhudmessage(0,KillText)
+			
+			CVAR_color_Kill[0] = 200
+			CVAR_color_Kill[1] = 000
+			CVAR_color_Kill[2] = 000
+						
+			ScreenFade(iKiller, (400 * 14), 0, 0, CVAR_color_Kill[0], CVAR_color_Kill[1], CVAR_color_Kill[2], 75)
+		}
+	}
+	return HAM_IGNORED
+}
+
+public eDeathMsg()
+{
+	new iKiller = read_data(DeathMsg_KillerID)
+	
+	if(is_user_connected(iKiller))
+	{
+		new iVictim = read_data(DeathMsg_VictimID)
+		if(iVictim != iKiller)
+		{
+			new iUserFlags = get_user_flags(iKiller)
+			static CsTeams:team; team = cs_get_user_team(iKiller)
+			
+			if(get_playersnum() >= get_pcvar_num(pCvars[pCvarMinPlayers]))
+			{
+				if(iUserFlags & ADMIN_SVIP)
+				{
+					PrivatePlayerData[iKiller][g_PlayerMoney] += team == CS_TEAM_T ? KillSettings[MONEY_T_EVIP_KILL] : KillSettings[MONEY_CT_EVIP_KILL]
+
+					set_user_health(iKiller, get_user_health(iKiller) + 3)
+
+				}
+				else if(iUserFlags & ADMIN_VIP)
+				{
+					PrivatePlayerData[iKiller][g_PlayerMoney] += team == CS_TEAM_T ? KillSettings[MONEY_T_VIP_KILL] : KillSettings[MONEY_CT_VIP_KILL]
+					
+					set_user_health(iKiller, get_user_health(iKiller) + 2)
+				}
+				else
+				{
+					PrivatePlayerData[iKiller][g_PlayerMoney] += team == CS_TEAM_T ? KillSettings[MONEY_T_NORMAL_KILL] : KillSettings[MONEY_CT_NORMAL_KILL]
+				}
+				
+				g_iNewMoney = clamp
+				(
+					PrivatePlayerData[iKiller][g_PlayerMoney], 
+					0,
+					KillSettings[MONEY_MAX]
+				)
+				g_iMsgHookMoney = register_message(msg_Money, "Message_Money")
+			}	
+			else
+			{
+				color_chat(iKiller, "%L",iKiller, "CHAT_MIN_PLAYERS_MESSAGE", get_pcvar_num(pCvars[pCvarMinPlayers]))
+			}
+		}
+	}
+}
+
+public Message_Money(iMsgId, iMsgDest, id)
+{
+	unregister_message(msg_Money, g_iMsgHookMoney)
+	cs_set_money_value(id, g_iNewMoney)
+	set_msg_arg_int(Money_Amount, ARG_LONG, g_iNewMoney)
+}
+
+public ham_Player_ResetMaxSpeed_Post(id)
+{
+	if(!is_user_alive(id))
+	{
+		return HAM_IGNORED
+	}
+	
+	switch(cs_get_user_team(id))
+	{
+		case CS_TEAM_T:
+		{
+			if(PrivatePlayerData[id][g_bFreezedBySlowG])
+			{
+				fm_set_user_maxspeed(id, 100.0)
+			}
+			else
+			{
+				if(fm_get_user_speed(id) != 1.0)
+				{
+					if(UserFurienBase[id][g_bSpeed])
+					{
+						fm_set_user_speed(id, get_pcvar_float(_:pCvars[pCvarFurienSpeed]))
+					}
+				}
+			}
+		}
+		
+		case CS_TEAM_CT:
+		{
+			if(SpecialItemActivated[id][g_bActived_Speed])
+			{
+				fm_set_user_speed(id, 420.0)
+			}
+		}
+	}
+	
+	return HAM_IGNORED
+}
+
+public ham_Player_PostThink_Post(id)
+{
+	if(!IsPlayer(id))
+		return HAM_IGNORED
+		
+	if(g_szItem[id][TOTAL_ITEMS] == ITEM_BUNNYHOP)
+	{
+		if(pev(id, pev_button) & IN_JUMP)
+		{
+			new flags = pev(id, pev_flags)
+			
+			if(flags & FL_WATERJUMP)
+				return HAM_IGNORED
+				
+			if(pev(id, pev_waterlevel) >= 2)
+				return HAM_IGNORED
+				
+			if(!(flags & FL_ONGROUND))
+				return HAM_IGNORED
+				
+			static Float:velocity[3]
+			pev(id, pev_velocity, velocity)
+			velocity[2] += 250.0
+			set_pev(id, pev_velocity, velocity)
+			
+			set_pev(id, pev_gaitsequence, 6)
+		}
+	}
+	
+	if(SpecialItemActivated[id][g_bActived_SetWallHang] && SpecialItemActivated[id][g_bActived_Hanged])
+	{
+		engfunc(EngFunc_SetSize, id, g_fVecMins[id], g_fVecMaxs[id])
+		engfunc(EngFunc_SetOrigin, id, g_fVecOrigin[id])
+		set_pev(id, pev_velocity, Float:{0.0,0.0,0.0})
+		set_pdata_float(id, m_flNextAttack, 1.0, XTRA_OFS_PLAYER)
+	}
+	
+	return HAM_IGNORED
+}
+
+public ham_Player_Jump_Pre(id)
+{
+	static afButtonPressed; afButtonPressed = get_pdata_int(id, m_afButtonPressed)
+	
+	if(g_bRoundEnd || !SpecialItemActivated[id][g_bActived_SetWallHang] || !SpecialItemActivated[id][g_bActived_Hanged] || !is_user_alive(id))
+	{
+		return HAM_IGNORED
+	}
+	
+	if((pev(id, pev_flags) & FL_WATERJUMP) || pev(id, pev_waterlevel) >= 2)
+	{
+		return HAM_IGNORED
+	}
+	
+	if(~afButtonPressed & IN_JUMP)
+	{
+		return HAM_IGNORED
+	}
+	
+	SpecialItemActivated[id][g_bActived_Hanged] = false
+	
+	new Float:fVecVelocity[3]
+	velocity_by_aim(id, 600, fVecVelocity)
+	set_pev(id, pev_velocity, fVecVelocity)
+	set_user_velocity(id, fVecVelocity)
+	
+	set_pdata_int(id, m_Activity, ACT_HOP)
+	set_pdata_int(id, m_IdealActivity, ACT_HOP)
+	set_pev(id, pev_gaitsequence, PLAYER_JUMP)
+	set_pev(id, pev_frame, 0.0)
+	set_pdata_int(id, m_afButtonPressed, afButtonPressed & ~IN_JUMP)
+	
+	return HAM_SUPERCEDE
+}
+
+public ham_Touch_Pre(iEnt, id)
+{
+	if(!g_bRoundEnd
+	&& IsPlayer(id)
+	&& SpecialItemActivated[id][g_bActived_SetWallHang]
+	&& !SpecialItemActivated[id][g_bActived_Hanged]
+	&& is_user_alive(id)
+	&& pev(id, pev_button) & IN_USE
+	&& ~(pev(id, pev_flags) & FL_ONGROUND))
+	{
+		SpecialItemActivated[id][g_bActived_Hanged] = true
+		pev(id, pev_mins, g_fVecMins[id])
+		pev(id, pev_maxs, g_fVecMaxs[id])
+		pev(id, pev_origin, g_fVecOrigin[id])
+	}
+}
+
+public TouchWeapons(iWeapon, id)
+{
+	if(!is_user_connected(id))
+		return HAM_IGNORED
+		
+	new Model[MAX_PLAYERS]
+	pev(iWeapon, pev_model, Model, charsmax(Model))
+	
+	if(cs_get_user_team(id) == CS_TEAM_T)
+	{	
+		if(containi(Model, "w_backpack") != -1)
+			return HAM_IGNORED
+			
+		return HAM_SUPERCEDE
+	}
+	return HAM_IGNORED
+}
+
+public SwitchToC4(id)
+{		
+	new iDelay = get_pcvar_num(pCvars[pCvarPlantDelay])
+	
+	if(!(g_HoldingC4 & (1<<(id & 31))) && ((get_systime() - g_RoundStartTime) < iDelay))
+	{
+		set_task(1.0, "ShowHUD", id + TASK_C4, .flags="a", .repeat=(iDelay - (get_systime() - g_RoundStartTime)) - 1) 
+		g_HoldingC4 |= (1 << (id & 31))
+	}
+}
+
+public SwitchToOther(id)
+{
+	if(g_HoldingC4 & (1<<(id & 31)))
+	{
+		ClearSyncHud(id, HudSync[hudC4Delay])
+		remove_task(id + TASK_C4)
+		g_HoldingC4 &= ~(1<<(id & 31))
+	}
+}
+
+public ShowHUD(id)
+{
+	id -= TASK_C4
+	
+	if(is_user_alive(id)
+	&& cs_get_user_team(id) == CS_TEAM_T
+	&& get_user_weapon(id) & CSW_C4)
+	{
+		new szHud[40]
+	
+		formatex(szHud, charsmax(szHud),"%L",id, !is_plugin_loaded("C4_plant_delay") ? "MESSAGE_C4" : "HUD_C4_PLANT_DELAY_MESSAGE", get_pcvar_num(pCvars[pCvarPlantDelay]) - (get_systime() - g_RoundStartTime))
+		set_hudmessage(220, 80, 000, -1.0, 0.16, 0, 1.0, 1.0)
+		ShowSyncHudMsg(id, HudSync[hudC4Delay],szHud)
+	}
+}
+
+public ham_PrimaryAttack_C4(iEnt) 
+{    
+	return ((get_systime() - g_RoundStartTime) <= get_pcvar_num(pCvars[pCvarPlantDelay])) ? HAM_SUPERCEDE : HAM_IGNORED
+}
+
+public ham_UseStationary_Post(entity, caller, activator, use_type)
+{
+	if(use_type == USE_STOPPED && is_user_connected(caller))
+		replace_weapon_models(caller, get_user_weapon(caller))
+}
+
+public ham_Item_Deploy_Post(weapon_ent)
+{
+	static id; id = fm_cs_get_weapon_ent_owner(weapon_ent)
+	
+	if(!pev_valid(id))
+		return
+		
+	static weaponid; weaponid = cs_get_weapon_id(weapon_ent)
+	replace_weapon_models(id, weaponid)
+}
+
+public fw_SetModel(ent, const model[])
+{
+	if(!pev_valid(ent))
+		return FMRES_IGNORED
+	
+	new id = pev(ent, pev_owner)
+	
+	if(equal(model,"models/w_tmp.mdl"))
+	{
+		dllfunc(DLLFunc_Think, ent)
+		return FMRES_SUPERCEDE
+	}
+	else if(equal(model,"models/w_backpack.mdl"))
+	{
+		static Float:RenderColor[3] 
+
+		RenderColor[0] = 255.0
+		RenderColor[1] = 0.0
+		RenderColor[2] = 0.0
+
+		set_pev(ent, pev_renderfx, kRenderFxGlowShell)
+		set_pev(ent, pev_rendercolor, RenderColor)
+		set_pev(ent, pev_rendermode, kRenderNormal)
+		set_pev(ent, pev_renderamt, 200.0)
+	}
+	else if(equal(model, "models/w_smokegrenade.mdl"))
+	{
+		engfunc(EngFunc_SetModel, ent, WeaponSkins[V_SMOKEGRENADE_W])
+		return FMRES_SUPERCEDE
+	}
+	
+	if(ConfigSettingMenu[id][g_bSkins])
+	{
+		if(equal(model, "models/w_hegrenade.mdl"))
+		{
+			engfunc(EngFunc_SetModel, ent, WeaponSkins[V_HEGRENADE_W])
+			return FMRES_SUPERCEDE
+		}
+		
+		else if(equal(model, "models/w_flashbang.mdl"))
+		{
+			engfunc(EngFunc_SetModel, ent, WeaponSkins[V_FLASHBANG_W])
+			return FMRES_SUPERCEDE
+		}
+	}
+	return FMRES_IGNORED
+}
+
+public HUD(id)
+{    
+	id -= TASK_HUD_SPECIAL_ITEM
+			
+	new target = entity_get_int(id, EV_INT_iuser2)
+	if(!target)
+		return
+
+	new szItemsName[20]
+	switch(g_szItem[target][TOTAL_ITEMS])
+	{ 
+		case ITEM_NONE:		formatex(szItemsName, charsmax(szItemsName), "%L", id, "HUD_ITEM_NONE")
+		case ITEM_REGEN:	formatex(szItemsName, charsmax(szItemsName), "%L", id, "HUD_ITEM_REGEN")
+		case ITEM_MULTI_JUMP:	formatex(szItemsName, charsmax(szItemsName), "%L", id, "HUD_ITEM_MJ")
+		case ITEM_NO_DAMAGE:	formatex(szItemsName, charsmax(szItemsName), "%L", id, "HUD_ITEM_PROTECTION")
+		case ITEM_CONFUSED:	formatex(szItemsName, charsmax(szItemsName), "%L", id, "HUD_ITEM_CAMOUFLAGE")
+		case ITEM_IMMORTALITY:	formatex(szItemsName, charsmax(szItemsName), "%L", id, "HUD_ITEM_IMMORTALITY")
+		case ITEM_IMMOBILIZE:	formatex(szItemsName, charsmax(szItemsName), "%L", id, "HUD_ITEM_FROST_CLIP")
+		case ITEM_WISE_EYE:	formatex(szItemsName, charsmax(szItemsName), "%L", id, "HUD_ITEM_SMART_EYE")
+		case ITEM_BUNNYHOP:	formatex(szItemsName, charsmax(szItemsName), "%L", id, "HUD_ITEM_BUNNYHOP")
+	}
+			
+	set_hudmessage(150, 50, 35, -1.0, 0.95, 0, 1.0, 0.1)
+	ShowSyncHudMsg(id,HudSync[hudSpecialItems], "%L", id, "HUD_SPECTATING_MESSAGE", PrivatePlayerData[target][g_PlayerMoney], get_user_armor(target) , szItemsName)
+} 
+
+public AddToFullPack(es_handle, e, ent, host, hostflags, player, pSet)
+{
+	if(!is_user_connected(host) || !is_user_connected(ent) && !is_user_alive(host) || !is_user_alive(ent))
+		return FMRES_IGNORED
+		
+	if(player)
+	{
+		static CsTeams:team; team = cs_get_user_team(ent)
+		static CsTeams:teamhost; teamhost = cs_get_user_team(host)
+		
+		if(g_szItem[host][TOTAL_ITEMS] == ITEM_WISE_EYE)
+		{
+			if(team == CS_TEAM_T && team != teamhost)
+			{
+				if(SpecialItemActivated[ent][g_bActived_Hit])
+				{
+					set_es(es_handle, ES_RenderFx, kRenderFxDistort)
+					set_es(es_handle, ES_RenderColor, {0, 0, 0})
+					set_es(es_handle, ES_RenderMode, kRenderTransAdd)
+					set_es(es_handle, ES_RenderAmt, 127)
+				}
+			}
+		}
+		
+		if(team == CS_TEAM_T && team == teamhost)
+		{
+			new iWeapon = get_user_weapon(ent)
+			
+			if(iWeapon == CSW_TMP || iWeapon == CSW_SMOKEGRENADE || iWeapon == CSW_KNIFE)
+			{
+				new iSpeed, Float:fVecVelocity[3]
+				entity_get_vector(ent, EV_VEC_velocity, fVecVelocity)
+				iSpeed = floatround(vector_length(fVecVelocity))
+
+				if(iSpeed < 10)
+				{
+					set_es(es_handle, ES_RenderFx, kRenderFxDistort)
+					set_es(es_handle, ES_RenderColor, { 0, 0, 0 })
+					set_es(es_handle, ES_RenderMode, kRenderTransAdd)
+					set_es(es_handle, ES_RenderAmt, 127)
+					
+					new HoldTime = floatround(4096.0 * 0.3, floatround_round), HoldType = HoldTime
+					ScreenFade(ent, HoldTime, HoldType, 4096, 0, 0, 0, 70)
+				}
+			}
+		}
+	}
+	
+	return FMRES_IGNORED
+}
+
+public think_Invisibility(Ent)
+{
+	if(Ent != iEnt)
+		return FMRES_IGNORED
+		
+	g_t_time += 0.1
+	entity_set_float(Ent, EV_FL_nextthink, g_t_time)
+	
+	new iWeapon[MAX_PLAYERS+1]
+	new bool:isWithAvaliableWeapons[MAX_PLAYERS+1]
+
+	new iPlayers[MAX_PLAYERS], iNum, id
+	get_players(iPlayers, iNum, "ae", "TERRORIST")
+	for(new i;i < iNum;i++)
+	{
+		id = iPlayers[i]
+		
+		iWeapon[id] = get_user_weapon(id)
+		isWithAvaliableWeapons[id] = bool:(iWeapon[id] == CSW_KNIFE || iWeapon[id] == CSW_SMOKEGRENADE || iWeapon[id] == CSW_TMP)
+			
+		if(!SpecialItemActivated[id][g_bActived_Hanged])
+		{
+			if(isWithAvaliableWeapons[id])
+			{
+				new Float:fVec[3], iSpeed
+				entity_get_vector(id, EV_VEC_velocity, fVec)
+				iSpeed = floatround(vector_length(fVec))
+						
+				if(iSpeed < 255)
+				{
+					set_user_rendering(id, kRenderFxNone, 0, 0, 0, kRenderTransAlpha, get_user_flags(id) & ADMIN_SVIP ? (iSpeed / 2) : iSpeed) 
+				}
+				else 
+				{
+					set_user_rendering(id, kRenderFxNone, 0, 0, 0, kRenderNormal, 0)
+				}
+			} 
+			else 
+			{
+				set_user_rendering(id, kRenderFxNone, 0, 0, 0, kRenderNormal, 0)
+			}
+		}
+		else
+		{
+			if(isWithAvaliableWeapons[id])
+			{
+				set_user_rendering(id, kRenderFxNone, 0, 0, 0, kRenderTransAlpha, 0)
+			}
+			else
+			{
+				set_user_rendering(id, kRenderFxNone, 0, 0, 0, kRenderNormal, 0)
+			}
+		}
+	}
+	return FMRES_IGNORED
+}
+
+public PreThink(id)
+{
+	if(is_user_alive(id) && ShopItem[id][g_SK])
+	{
+		new iTemp, iWepId, iButton
+		iWepId = get_user_weapon(id, iTemp, iTemp)
+		iButton = pev(id, pev_button)
+		
+		if(iWepId == CSW_KNIFE)
+		{
+			if(iButton & IN_ATTACK)
+			{
+				iButton = (iButton & ~IN_ATTACK) | IN_ATTACK2
+				set_pev(id, pev_button, iButton)
+			}
+		}
+	}
+	
+	return PLUGIN_HANDLED
+}
+
+public ForwardGameDescription()
+{
+	new szGameDescription[20]
+	get_pcvar_string(pCvars[pCvarGameDescription], szGameDescription, charsmax(szGameDescription))
+
+	forward_return(FMV_STRING, szGameDescription)
+	return FMRES_SUPERCEDE
+}
+
+public EmitSound(id, channel, sample[])
+{
+	new i
+	
+	if(is_user_connected(id) && is_user_alive(id))
+	{
+		static CsTeams:team; team = cs_get_user_team(id)
+		
+		switch(team)
+		{
+			case CS_TEAM_T:
+			{
+				if(ConfigSettingMenu[id][g_bSkins])
+				{
+					if(!ShopItem[id][g_SK])
+					{
+						switch(g_szKnife[id][TOTAL_KNIVES])
+						{
+							case KNIFE_COMBAT:
+							{
+								for(i = 0; i < sizeof CombaSounds; i++)
+								{
+									if(equal(sample, oldknife_sounds[i]))
+									{
+										EmitSnd(id, CombaSounds[i])
+										return FMRES_SUPERCEDE
+									}
+								}
+							}
+							case KNIFE_EPIC:
+							{
+								for(i = 0; i < sizeof EpicSounds; i++)
+								{
+									if(equal(sample, oldknife_sounds[i]))
+									{
+										EmitSnd(id, EpicSounds[i])
+										return FMRES_SUPERCEDE;
+									}
+								}
+							}
+							case KNIFE_SPIRIT:
+							{
+								for(i = 0; i < sizeof SpiritSounds; i++)
+								{
+									if(equal(sample, oldknife_sounds[i]))
+									{
+										EmitSnd(id, SpiritSounds[i])
+										return FMRES_SUPERCEDE
+									}
+								}
+							}		
+							case KNIFE_DEAD:
+							{
+								for(i = 0; i < sizeof DeadSounds; i++)
+								{
+									if(equal(sample, oldknife_sounds[i]))
+									{
+										EmitSnd(id, DeadSounds[i])
+										return FMRES_SUPERCEDE
+									}
+								}
+							}
+							case KNIFE_AXE:
+							{
+								for(i = 0; i < sizeof AxeSounds; i++)
+								{
+									if(equal(sample, oldknife_sounds[i]))
+									{
+										EmitSnd(id, AxeSounds[i])
+										return FMRES_SUPERCEDE
+									}
+								}
+							}
+							case KNIFE_HUNTER:
+							{
+								for(i = 0; i < sizeof HunterSounds; i++)
+								{
+									if(equal(sample, oldknife_sounds[i]))
+									{
+										EmitSnd(id, HunterSounds[i])
+										return FMRES_SUPERCEDE
+									}
+								}
+							}				
+							case KNIFE_SILVER:
+							{
+								for(i = 0; i < sizeof SilverSounds; i++)
+								{
+									if(equal(sample, oldknife_sounds[i]))
+									{
+										EmitSnd(id, SilverSounds[i])
+										return FMRES_SUPERCEDE
+									}
+								}
+							}
+							case KNIFE_CROWBAR:
+							{
+								for(i = 0; i < sizeof CrowSounds; i++)
+								{
+									if(equal(sample, oldknife_sounds[i]))
+									{
+										EmitSnd(id, CrowSounds[i])
+										return FMRES_SUPERCEDE
+									}
+								}
+							}
+						}
+					}
+				}
+				else
+				{
+					if(ShopItem[id][g_SK])
+					{
+						for(i = 0; i < sizeof SuperSounds; i++)
+						{
+							if(equal(sample, oldknife_supersounds[i]))
+							{
+								EmitSnd(id, SuperSounds[i])
+								return FMRES_SUPERCEDE
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return FMRES_HANDLED
+}
+
+public CmdStart(id, uc_handle)
+{
+	if(!is_user_alive(id))
+		return FMRES_IGNORED
+		
+	new flags = pev(id, pev_flags)
+	
+	if((get_uc(uc_handle, UC_Buttons) & IN_JUMP) && !(flags & FL_ONGROUND) && !(pev(id, pev_oldbuttons) & IN_JUMP) && PrivatePlayerData[id][g_JumpCount])
+	{
+		PrivatePlayerData[id][g_JumpCount]--
+		new Float:velocity[3]
+		pev(id, pev_velocity, velocity)
+		velocity[2] = random_float(265.0,285.0)
+		set_pev(id, pev_velocity, velocity)
+	}
+	else if(flags & FL_ONGROUND)
+	{
+		PrivatePlayerData[id][g_JumpCount] = (g_szItem[id][TOTAL_ITEMS] == ITEM_MULTI_JUMP) ? 2 : 1
+	}
+	
+	return FMRES_IGNORED
+}
+
+public Round_Start()
+{
+	if(RoundsCount >= 3)
+		RoundsCount = 0
+	
+	g_RoundStartTime = get_systime()
+	g_HoldingC4 = 0
+}
+public ShowInfo(id)
+{
+	id -= TASK_SHOW_INFO
+	
+	color_chat(id, "%L", id, "CHAT_SPAWN_FIRST_MESSAGE")
+}
+public ShowBestMoney(id)
+{	
+	id -= TASK_SHOW_BEST_MONEY
+
+	new iPenize, iBestPlayer, iBestPenez = 1000
+	
+	new iPlayers[MAX_PLAYERS], iNum, iPlayer
+	get_players(iPlayers, iNum)
+
+	if(iNum <= 4)
+		return
+
+	for(new i;i < iNum;i++)
+	{
+		iPlayer = iPlayers[i]
+
+		if(~get_user_flags(iPlayer) & ADMIN_SVIP)
+		{
+			iPenize = PrivatePlayerData[iPlayer][g_PlayerMoney]
+				
+			if(iPenize > iBestPenez)
+			{
+				iBestPlayer = iPlayer
+				iBestPenez = iPenize
+			}
+		}
+	}
+	
+	if(iBestPlayer)
+	{
+		color_chat(id, "%L", id, "CHAT_SPAWN_SECOND_MESSAGE", PrivatePlayerData[iBestPlayer][g_szName], iBestPenez, (get_user_flags(iBestPlayer) & ADMIN_VIP) ? "e" : "")
+	}
+}
+
+public Round_End()
+{
+	g_bRoundEnd = true
+	
+	new iPlayers[MAX_PLAYERS], iNum, id
+	get_players(iPlayers, iNum)
+	for(new i;i < iNum;i++)
+	{
+		id = iPlayers[i]
+	
+		SpecialItemActivated[id][g_bActived_GodMode] = false
+		SpecialItemActivated[id][g_bActived_Wallhang] = false
+		SpecialItemActivated[id][g_bActived_Hanged] = false
+			
+		if(task_exists(id + TASK_IMMOR))
+			remove_task(id + TASK_IMMOR)
+	}
+
+	RoundEnd = true
+	
+	iSuperKnifeCount = 0
+}
+
+public BombPlanted()
+{
+	if(g_bRoundEnd)
+		return PLUGIN_HANDLED
+
+	new id = get_user_id()
+	
+	new iMinPlayers = get_pcvar_num(pCvars[pCvarMinPlayers])
+	if(get_playersnum() < iMinPlayers)
+	{	
+		color_chat(id, "%L", id, "CHAT_MIN_PLAYERS_MESSAGE", iMinPlayers)
+		return PLUGIN_HANDLED
+	}
+	else
+	{
+		new iBombPlantBonus = get_pcvar_num(pCvars[pCvarBombPlant])
+			
+		color_chat(id, "%L", id, "CHAT_C4_PLANT_BONUS_MESSAGE", iBombPlantBonus)
+		
+		PrivatePlayerData[id][g_PlayerMoney] += iBombPlantBonus
+		cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+	}
+	return PLUGIN_CONTINUE
+}
+
+public BombDefused()
+{
+	new id = get_user_id()
+
+	new iMinPlayers = get_pcvar_num(pCvars[pCvarMinPlayers])
+	if(get_playersnum() < get_pcvar_num(pCvars[pCvarMinPlayers]))
+	{
+		color_chat(id, "%L", id, "CHAT_MIN_PLAYERS_MESSAGE", iMinPlayers)
+		return PLUGIN_HANDLED
+	}
+	else
+	{	
+		new iBombDefuseBonus = get_pcvar_num(pCvars[pCvarBombDefuse])
+		color_chat(id, "%L", id, "CHAT_C4_DEFUSE_BONUS_MESSAGE", iBombDefuseBonus)
+
+		PrivatePlayerData[id][g_PlayerMoney] += iBombDefuseBonus
+		cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+	}
+	return PLUGIN_CONTINUE
+}
+
+public message_StatusIcon(iMsgId, iMsgDest, id)
+{
+	static szIcon[5]
+	get_msg_arg_string(2, szIcon, charsmax(szIcon))
+	
+	if(szIcon[0] == 'b' && szIcon[2] == 'y' && szIcon[3] == 'z') 
+	{
+		set_pdata_int(id, 235, get_pdata_int(id, 235) & ~(1<<0))
+		return PLUGIN_HANDLED
+	}
+	
+	return PLUGIN_CONTINUE
+}
+
+public message_SendAudio(iMsgId, iMsgDest, id)
+{
+	new szSound[19]
+	get_msg_arg_string(2, szSound, charsmax(szSound))
+	
+	if(get_msg_block(msg_TextMsg) == BLOCK_NOT)
+	{
+		set_msg_block(msg_TextMsg, BLOCK_ONCE)
+	}
+	
+	if(equal(szSound, "%!MRAD_FIREINHOLE"))
+		return PLUGIN_HANDLED
+
+	return PLUGIN_CONTINUE
+}
+
+public message_ClCorpse(iMsgId, iMsgDest, id)
+	return PLUGIN_HANDLED
+
+public fn_RadarScan(playerid)
+{
+	playerid -= TASK_SHOW_RADAR
+	
+	if(!SpecialItemActivated[playerid][g_bActived_Radar])
+		return
+	
+	new furien_count = 0
+	new furien_list[MAX_PLAYERS]
+	new FurienCoords[3]
+
+	new iPlayers[MAX_PLAYERS], iNum, id
+	get_players(iPlayers, iNum, "ae", "TERRORIST")
+	for(new i;i < iNum;i++)
+	{
+		id = iPlayers[i]
+		
+		furien_count++
+		furien_list[furien_count]=id
+	
+		for (new i=1;i<furien_count;i++)
+		{			
+			get_user_origin(furien_list[i], FurienCoords)
+			
+			message_begin(MSG_ONE_UNRELIABLE, msg_HostagePos, {0,0,0}, playerid)
+			write_byte(id)
+			write_byte(i)		
+			write_coord(FurienCoords[0])
+			write_coord(FurienCoords[1])
+			write_coord(FurienCoords[2])
+			message_end()
+			
+			message_begin(MSG_ONE_UNRELIABLE, msg_HostageK, {0,0,0}, playerid)
+			write_byte(i)
+			message_end()
+		}
+	}
+}
+
+public command_Shop(id)
+{
+	(CsTeams:cs_get_user_team(id) == CS_TEAM_T) ? Open_ShopTerrorist(id) : Open_ShopCounter(id)
+}
+
+public command_Items(id)
+{
+	(CsTeams:cs_get_user_team(id) == CS_TEAM_T) ? Open_ItemsTerrorist(id) : Open_ItemsCounter(id)
+}
+
+public RestartData(id,level,cid)
+{
+	if(cmd_access(id,level,cid,1))
+	{
+		color_chat(0, "%L", LANG_PLAYER, "CHAT_ADMIN_DATA_RESETED_MESSAGE", PrivatePlayerData[id][g_szName])
+		
+		RestartAllData()
+	}
+}
+
+RestartAllData()
+{
+	nvault_clear(g_nVaultSaves)
+	
+	new iPlayers[MAX_PLAYERS], iNum, player
+	get_players(iPlayers, iNum)
+	for(new i;i < iNum;i++)
+	{
+		player = iPlayers[i]
+
+		PrivatePlayerData[player][g_PlayerMoney] = 0
+			
+		if(is_user_alive(player))
+			cs_set_user_money(player,PrivatePlayerData[player][g_PlayerMoney],1)
+		
+		g_szItem[player][TOTAL_ITEMS] = ITEM_NONE
+	
+		for(new b;b < sizeof SpecialItem;b++)
+		{
+			SpecialItem[player][EspecialItems:b] = 0
+		}
+	}
+}
+
+public handle_say(id)
+{
+	if(PrivatePlayerData[id][g_bCantSay])
+	{
+		client_print(id, print_chat, "[Anti-Cheat]: %L", id, "CHAT_YOU_CANNOT_SAY_MESSAGE")
+		return PLUGIN_HANDLED
+	}
+	else
+	{
+		new Say[20]
+		read_argv(1,Say,charsmax(Say))
+		remove_quotes(Say)
+
+		if(equal(Say,"/amenu"))
+		{
+			AdminMenu(id)
+			return PLUGIN_HANDLED
+		}
+		else if(equal(Say,"/furien") || equal(Say,"furien"))
+		{
+			Open_FurMenu(id)
+			return PLUGIN_HANDLED
+		}
+		else if(equal(Say,"/rs"))
+		{
+			reset_score(id)
+			return PLUGIN_HANDLED
+		}
+	}
+	return PLUGIN_CONTINUE
+}
+Open_ShopTerrorist(id)
+{
+	if(!is_user_alive(id))
+		return PLUGIN_HANDLED
+
+	new formatMsg[80]
+	
+	new hShop = menu_create("\yFurien Menu \d|| \rFurien Shop", "Handler_ShopTerrorist")
+	
+	new szComprado[MAX_PLAYERS]
+	formatex(szComprado, charsmax(szComprado), "\w[%L]", id, "MENU_BOUGHT")
+	
+	formatex(formatMsg, charsmax(formatMsg), "HE grenade   ^t^t%s^n\d- %L", ShopItem[id][g_HE] ? szComprado : "\r30$", id, "MENU_ITEM_HE")
+	menu_additem(hShop, formatMsg, "1",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "+50 HP^t^t^t^t^t^t^t^t%s^n\d- %L", ShopItem[id][g_HP] ? szComprado : "\r85$", id, "MENU_ITEM_HP")
+	menu_additem(hShop, formatMsg, "2",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Super knife   ^t^t %s^n\d- %L", ShopItem[id][g_SK] ? szComprado : "\r90$", id, "MENU_ITEM_SK")
+	menu_additem(hShop, formatMsg, "3",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Sleep Gun ^t^t^t^t %s^n\d- %L", ShopItem[id][sleepgunitem] ? szComprado : "\r80$", id, "MENU_ITEM_SLEEPG")
+	menu_additem(hShop, formatMsg, "4",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Wallhang  ^t^t^t^t^t%s^n\d- %L", SpecialItemActivated[id][g_bActived_Wallhang] ? szComprado : "\r55$ \y[VIP]", id, "MENU_ITEM_WH")
+	menu_additem(hShop, formatMsg, "5",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Teleport   ^t^t^t^t^t%s^n\d- %L", ShopItem[id][g_Teleport] ? szComprado : "\r5$ \y[ExtraVIP]", id, "MENU_ITEM_TELEPORT")
+	menu_additem(hShop, formatMsg, "6",0)
+
+	formatex(formatMsg, charsmax(formatMsg), "%L", id, "BACK")
+	menu_additem(hShop,formatMsg,"7",0)
+	
+	menu_display(id, hShop)
+	
+	return PLUGIN_HANDLED
+}
+
+Open_ShopCounter(id)
+{
+	if(!is_user_alive(id))
+	{
+		return PLUGIN_HANDLED
+	}
+	new formatMsg[80]
+	
+	new hShop = menu_create("\yFurien Menu \d|| \rAnti-Furien Shop", "Handler_ShopCounter")
+	
+	new szComprado[MAX_PLAYERS]
+	formatex(szComprado, charsmax(szComprado), "\w[%L]", id, "MENU_BOUGHT")
+	
+	formatex(formatMsg, charsmax(formatMsg), "Defuse  ^t^t^t^t^t^t^t%s^n\d- %L", ShopItem[id][g_Defuse] ? szComprado : "\r5$", id, "MENU_ITEM_DEFUSE")
+	menu_additem(hShop, formatMsg, "1",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Slow Grenade  ^t %s^n\d- %L", ShopItem[id][g_SG] ? szComprado : "\r20$", id, "MENU_ITEM_SG")
+	menu_additem(hShop, formatMsg, "2",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "+50 HP^t^t^t^t^t^t^t^t%s^n\d- %L", ShopItem[id][g_HP] ? szComprado : "\r85$", id, "MENU_ITEM_HP")
+	menu_additem(hShop, formatMsg, "3",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Slow Gun  ^t^t^t^t^t%s^n\d- %L", ShopItem[id][slowgunitem] ? szComprado : "\r80$", id, "MENU_ITEM_SLOWG")
+	menu_additem(hShop, formatMsg, "4",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Speed   ^t^t^t^t^t^t^t%s^n\d- %L", SpecialItemActivated[id][g_bActived_Speed] ? szComprado : "\r90$", id, "MENU_ITEM_SPEED")
+	menu_additem(hShop, formatMsg, "5",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Radar-Scan ^t^t^t^t%s^n\d- %L", SpecialItemActivated[id][g_bActived_Radar] ? szComprado : "\r25$", id, "MENU_ITEM_RADAR")
+	menu_additem(hShop, formatMsg, "6",0)
+
+	formatex(formatMsg, charsmax(formatMsg), "%L", id, "BACK")
+	menu_additem(hShop,formatMsg,"7",0)
+	
+	menu_display(id, hShop)
+	
+	return PLUGIN_HANDLED
+}
+
+Open_ShopKnives(id)
+{
+	if(!is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_CT)
+	{
+		return PLUGIN_HANDLED
+	}
+	new formatMsg[80]
+	
+	new hKnf = menu_create("\yFurien Menu \d|| \rKnife skin", "Handler_ShopKnives")
+	
+	new szComprado[MAX_PLAYERS]
+	formatex(szComprado, charsmax(szComprado), "\w[%L]", id, "MENU_BOUGHT")
+		
+	formatex(formatMsg, charsmax(formatMsg), "Normal Knife ^t^t^t^t%s^n\d - %L", (g_szKnife[id][TOTAL_KNIVES] == KNIFE_DEFAULT) ? szComprado : "", id, "MENU_KNIFE_DEFAULT")
+	menu_additem(hKnf,formatMsg,"1",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Combat Knife ^t^t^t^t%s^n\d - %L", (g_szKnife[id][TOTAL_KNIVES] == KNIFE_COMBAT) ? szComprado : "\r15$", id, "MENU_KNIFE_COMBAT")
+	menu_additem(hKnf,formatMsg,"2",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "PickAxe Knife ^t^t^t %s^n\d - %L", (g_szKnife[id][TOTAL_KNIVES] == KNIFE_AXE) ? szComprado : "\r25$", id, "MENU_KNIFE_AXE")
+	menu_additem(hKnf,formatMsg,"3",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Silver Knife  ^t^t^t^t %s^n\d - %L", (g_szKnife[id][TOTAL_KNIVES] == KNIFE_SILVER) ? szComprado : "\r20$ \y[VIP]", id, "MENU_KNIFE_SILVER")
+	menu_additem(hKnf,formatMsg,"4",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Hunter Knife ^t^t^t^t %s^n\d - %L", (g_szKnife[id][TOTAL_KNIVES] == KNIFE_HUNTER) ? szComprado : "\r40$ \y[VIP]", id, "MENU_KNIFE_HUNTER")
+	menu_additem(hKnf,formatMsg,"5",0)
+
+	formatex(formatMsg, charsmax(formatMsg), "%L", id, "MORE")
+	menu_additem(hKnf,formatMsg,"6",0)
+
+	formatex(formatMsg, charsmax(formatMsg), "\r%L", id, "BACK")
+	menu_additem(hKnf,formatMsg,"7",0)
+	
+	menu_setprop(hKnf, MPROP_EXIT, MEXIT_ALL)
+	menu_display(id, hKnf, 0)
+	
+	return PLUGIN_HANDLED
+}
+
+Open_ShopKnives2(id)
+{
+	if(!is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_CT)
+	{
+		return PLUGIN_HANDLED
+	}
+	new formatMsg[70]
+	
+	new hKnf = menu_create("\yFurien Menu \d|| \rKnife skin", "Handler_ShopKnives2")
+	
+	new szComprado[MAX_PLAYERS]
+	formatex(szComprado, charsmax(szComprado), "\w[%L]", id, "MENU_BOUGHT")
+	
+	formatex(formatMsg, charsmax(formatMsg), "Spirit Knife ^t^t^t^t %s^n\d - %L", (g_szKnife[id][TOTAL_KNIVES] == KNIFE_SPIRIT) ? szComprado : "\r20$", id, "MENU_KNIFE_SPIRIT")
+	menu_additem(hKnf,formatMsg,"1",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Epic Knife  ^t^t^t^t %s^n\d - %L", (g_szKnife[id][TOTAL_KNIVES] == KNIFE_EPIC) ? szComprado : "\r30$ \y[ExtraVIP]", id, "MENU_KNIFE_EPIC")
+	menu_additem(hKnf,formatMsg,"2",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Crowbar Knife^t^t %s^n\d - %L", (g_szKnife[id][TOTAL_KNIVES] == KNIFE_CROWBAR) ? szComprado : "\r40$ \y[ExtraVIP]", id, "MENU_KNIFE_CROWBAR")
+	menu_additem(hKnf,formatMsg,"3",0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Dead Knife ^t^t^t^t %s^n\d - %L", (g_szKnife[id][TOTAL_KNIVES] == KNIFE_DEAD) ? szComprado : "\r50$ \y[ExtraVIP]", id, "MENU_KNIFE_DEAD")
+	menu_additem(hKnf,formatMsg,"4",0)
+
+	formatex(formatMsg, charsmax(formatMsg), "%L", id, "BACK")
+	menu_additem(hKnf,formatMsg,"5",0)
+	
+	menu_setprop(hKnf, MPROP_EXIT, MEXIT_ALL)
+	menu_display(id, hKnf, 0)
+	
+	return PLUGIN_HANDLED
+}
+
+Open_ItemsTerrorist(id)
+{
+	if(!is_user_alive(id))
+	{
+		return PLUGIN_HANDLED
+	}
+	new formatMsg[90]
+	
+	formatex(formatMsg, charsmax(formatMsg), "Furien Menu \d|| \rItems^n\w%L", id, "MENU_ESPECIAL_ITEM_TITTLE")
+	new hItem = menu_create(formatMsg, "Handler_ItemsTerrorist")
+
+	if(SpecialItem[id][g_RG] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r16000$^n\d- %L", id, "MENU_ESPECIAL_ITEM_HPREGEN", id, "MENU_ESPECIAL_ITEM_HPREGEN_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_HPREGEN", (g_szItem[id][TOTAL_ITEMS] == ITEM_REGEN) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_HPREGEN_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "1", 0)
+
+	if(SpecialItem[id][g_ND] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r14000$^n\d- %L", id, "MENU_ESPECIAL_ITEM_NO_DMG", id, "MENU_ESPECIAL_ITEM_NO_DMG_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_NO_DMG", (g_szItem[id][TOTAL_ITEMS] == ITEM_NO_DAMAGE) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_NO_DMG_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "2", 0)
+
+	if(SpecialItem[id][g_CO] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r15000$^n\d- %L", id, "MENU_ESPECIAL_ITEM_CONFUSED", id, "MENU_ESPECIAL_ITEM_CONFUSED_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_CONFUSED", (g_szItem[id][TOTAL_ITEMS] == ITEM_CONFUSED) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_CONFUSED_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "3", 0)
+
+	if(SpecialItem[id][g_IR] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r18000$ \y[ExtraVIP]^n\d- %L", id, "MENU_ESPECIAL_ITEM_IMORTAL", id, "MENU_ESPECIAL_ITEM_IMORTAL_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_IMORTAL", (g_szItem[id][TOTAL_ITEMS] == ITEM_IMMORTALITY) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_IMORTAL_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "4", 0)
+
+	if(SpecialItem[id][g_MJ] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r16000$ \y[ExtraVIP]^n\d- %L", id, "MENU_ESPECIAL_ITEM_MULTIJUMP", id, "MENU_ESPECIAL_ITEM_MULTIJUMP_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_MULTIJUMP", (g_szItem[id][TOTAL_ITEMS] == ITEM_MULTI_JUMP) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_MULTIJUMP_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "5", 0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "%L", id, "BACK")
+	menu_additem(hItem,formatMsg,"6",0)
+	
+	menu_display(id, hItem, 0)
+	
+	return PLUGIN_HANDLED
+}
+
+Open_ItemsCounter(id)
+{
+	if(!is_user_alive(id))
+	{
+		return PLUGIN_HANDLED
+	}
+	new formatMsg[90]
+	
+	formatex(formatMsg, charsmax(formatMsg), "Anti-Furien Menu \d|| \rItems^n\w%L", id, "MENU_ESPECIAL_ITEM_TITTLE")
+	new hItem = menu_create(formatMsg, "Handler_ItemsCounter")
+
+	if(SpecialItem[id][g_RG] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r16000$^n\d- %L", id, "MENU_ESPECIAL_ITEM_HPREGEN", id, "MENU_ESPECIAL_ITEM_HPREGEN_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_HPREGEN", (g_szItem[id][TOTAL_ITEMS] == ITEM_REGEN) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_HPREGEN_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "1", 0)
+
+	if(SpecialItem[id][g_IB] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r17000$ \y[ExtraVIP]^n\d- %L", id, "MENU_ESPECIAL_ITEM_IMMOBILIZE", id, "MENU_ESPECIAL_ITEM_IMMOBILIZE_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_IMMOBILIZE", (g_szItem[id][TOTAL_ITEMS] == ITEM_IMMOBILIZE) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_IMMOBILIZE_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "2", 0)
+
+	if(SpecialItem[id][g_WE] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r13000$ \y[ExtraVIP]^n\d- %L", id, "MENU_ESPECIAL_ITEM_WISE_EYE", id, "MENU_ESPECIAL_ITEM_WISE_EYE_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_WISE_EYE", (g_szItem[id][TOTAL_ITEMS] == ITEM_WISE_EYE) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_WISE_EYE_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "3", 0)
+
+	if(SpecialItem[id][g_BH] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r19000$ \y[ExtraVIP]^n\d- %L", id, "MENU_ESPECIAL_ITEM_BUNNYHOP", id, "MENU_ESPECIAL_ITEM_BUNNYHOP_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_BUNNYHOP", (g_szItem[id][TOTAL_ITEMS] == ITEM_BUNNYHOP) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_BUNNYHOP_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "4", 0)
+
+	if(SpecialItem[id][g_MJ] != 1)
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L\r16000$ \y[ExtraVIP]^n\d- %L", id, "MENU_ESPECIAL_ITEM_MULTIJUMP", id, "MENU_ESPECIAL_ITEM_MULTIJUMP_DESCRIP")
+	}
+	else 
+	{
+		formatex(formatMsg, charsmax(formatMsg), "%L%s^n\d- %L", id, "MENU_ESPECIAL_ITEM_MULTIJUMP", (g_szItem[id][TOTAL_ITEMS] == ITEM_MULTI_JUMP) ? "\y[ON]" : "\r[OFF]", id, "MENU_ESPECIAL_ITEM_MULTIJUMP_DESCRIP")
+	}
+	menu_additem(hItem, formatMsg, "5", 0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "%L", id, "BACK")
+	menu_additem(hItem,formatMsg,"6",0)
+	
+	menu_display(id, hItem, 0)
+	
+	return PLUGIN_HANDLED
+}
+
+Open_Primary(id)
+{
+	if(!is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_T)
+	{
+		return PLUGIN_HANDLED
+	}
+	
+	menu_display(id, Menus[MenuPrimary])
+	return PLUGIN_HANDLED
+}
+
+Open_Secondary(id)
+{
+	if(!is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_T)
+	{
+		return PLUGIN_HANDLED
+	}
+	
+	menu_display(id, Menus[MenuSecondary])
+	return PLUGIN_HANDLED
+}
+
+public Open_FurMenu(id)
+{
+	new CsTeams:team; team = cs_get_user_team(id)
+	
+	new hFur = menu_create("Furien Menu:", "Handler_FurMenu")
+	
+	new formatText[15]
+
+	if(team == CS_TEAM_T) 
+	{
+		formatex(formatText, charsmax(formatText), "%L", id, "MENU_DEFAULT_KNIFE")
+		menu_additem(hFur, formatText, "1", 0)
+	}
+
+	if(team == CS_TEAM_CT) 
+	{
+		formatex(formatText, charsmax(formatText), "%L", id, "MENU_DEFAULT_WEAPON")
+		menu_additem(hFur, formatText, "2", 0)
+	}
+
+	formatex(formatText, charsmax(formatText), "%L", id, "MENU_DEFAULT_SHOP")
+	menu_additem(hFur, formatText, "3", 0)
+
+	formatex(formatText, charsmax(formatText), "\y%L", id, "MENU_DEFAULT_ITEM")
+	menu_additem(hFur, formatText, "4", 0)
+
+	formatex(formatText, charsmax(formatText), "%L", id, "MENU_DEFAULT_INFOS")
+	menu_additem(hFur, formatText, "5", 0)
+
+	formatex(formatText, charsmax(formatText), "%L", id, "MENU_DEFAULT_SETTINGS")
+	menu_additem(hFur, formatText, "6", 0)
+
+	switch(get_user_flags(id))
+	{
+		case ADMIN_VIP: 
+		{
+			formatex(formatText, charsmax(formatText), "\y%L ExtraVIP", id, "MENU_DEFAULT_ACTIVE")
+			menu_additem(hFur, formatText, "7", 0)
+		}
+		case ADMIN_USER:
+		{
+			formatex(formatText, charsmax(formatText), "\y%L VIP", id, "MENU_DEFAULT_ACTIVE")
+			menu_additem(hFur, formatText, "7", 0)
+		}
+	}
+
+	menu_display(id, hFur, 0)
+	
+	return PLUGIN_HANDLED
+}
+
+public CmdAdminMenu(id)
+{
+	if(get_user_flags(id) & ADMIN_SVIP)	
+	{
+		AdminMenu(id)
+	}
+}
+
+public AdminMenu(id)
+{	
+	Menus[MenuAdminCmds] = menu_create("Admin Menu","admin_m_handler")
+
+	new formatText[15]
+	formatex(formatText, charsmax(formatText), "%L", id, "MENU_MESSAGES_HUD")
+	menu_additem(Menus[MenuAdminCmds],formatText)
+
+	formatex(formatText, charsmax(formatText), "%L", id, "MENU_VOTEMAP")
+	menu_additem(Menus[MenuAdminCmds],formatText)
+
+	formatex(formatText, charsmax(formatText), "%L", id, "MENU_AMXMODMENU")
+	menu_additem(Menus[MenuAdminCmds],formatText)
+
+	formatex(formatText, charsmax(formatText), "%L", id, "MENU_RESET_DATA")
+	menu_additem(Menus[MenuAdminCmds],formatText)
+
+	menu_additem(Menus[MenuAdminCmds],g_Grab[id] ? "Admin Grab \y[ON]" : "Admin Grab \r[OFF]","5", 0)
+
+	menu_display(id,Menus[MenuAdminCmds])
+}
+
+public Msg_Menu(id)
+{
+	if(get_user_flags(id) & ADMIN_IMMUNITY)
+	{			
+		Menus[MenuMessages] = menu_create("Messages Menu","msg_handler")
+
+		new formatText[30]
+
+		formatex(formatText, charsmax(formatText), "%L^n\d- %L", id, "MENU_OBJECTIVES", id, "MENU_OBJECTIVES_DESCRIP")
+		menu_additem(Menus[MenuAdminCmds],formatText)
+
+		formatex(formatText, charsmax(formatText), "%L^n\d- %L", id, "MENU_SERVER_RULE", id, "MENU_SERVER_RULE_DESCRIP")
+		menu_additem(Menus[MenuAdminCmds],formatText)
+
+		formatex(formatText, charsmax(formatText), "%L^n\d- %L", id, "MENU_CONSEQUENCES", id, "MENU_CONSEQUENCES_DESCRIP")
+		menu_additem(Menus[MenuAdminCmds],formatText)
+
+		formatex(formatText, charsmax(formatText), "%L^n\d- %L", id, "MENU_CONTACTS", id, "MENU_CONTACTS_DESCRIP")
+		menu_additem(Menus[MenuAdminCmds],formatText)
+
+		formatex(formatText, charsmax(formatText), "%L", id, "BACK")
+		menu_additem(Menus[MenuAdminCmds],formatText)
+
+		menu_display(id,Menus[MenuMessages])
+	}
+}
+
+Open_Setting(id)
+{
+	if(!is_user_alive(id))
+	{
+		return PLUGIN_HANDLED
+	}
+	new formatMsg[80]
+	
+	formatex(formatMsg, charsmax(formatMsg), "\yFurien Menu \d|| %L", id, "MENU_SETTINGS_TITTLE")
+	new hSet = menu_create(formatMsg, "Handler_Setting")
+	
+	formatex(formatMsg, charsmax(formatMsg), "Fast menu ^t^t^t^t^t\y[%s%L\y]^n\d- %L", ConfigSettingMenu[id][g_bFMenu] ? "\w" : "\r", id, (ConfigSettingMenu[id][g_bFMenu]) ? "MENU_ENABLED" : "MENU_DISABLED", id, "MENU_SETTINGS_FAST_MENU")
+	menu_additem(hSet, formatMsg, "1", 0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Kill effect ^t^t^t^t^t \y[%s%L\y]^n\d- %L", ConfigSettingMenu[id][g_bEffect] ? "\w" : "\r", id, (ConfigSettingMenu[id][g_bEffect]) ? "MENU_ENABLED" : "MENU_DISABLED", id, "MENU_SETTINGS_EFFECT")
+	menu_additem(hSet, formatMsg, "2", 0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Old Weapons ^t^t^t\y[%s%L\y]^n\d- %L", ConfigSettingMenu[id][g_bSkins] ? "\r" : "\w", id, (ConfigSettingMenu[id][g_bSkins]) ? "MENU_DISABLED" : "MENU_ENABLED", id, "MENU_SETTINGS_SKINS")
+	menu_additem(hSet, formatMsg, "3", 0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Start Sound ^t^t^t^t\y[%s%L\y]^n\d- %L", ConfigSettingMenu[id][g_bStartSound] ? "\w" : "\r", id, (ConfigSettingMenu[id][g_bStartSound]) ? "MENU_ENABLED" : "MENU_DISABLED", id, "MENU_SETTINGS_START_SOUND")
+	menu_additem(hSet, formatMsg, "4", 0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "Furien 3D ^t^t^t^t^t \y[%s%L\y]^n\d- %L", ConfigSettingMenu[id][g_b3D] ? "\w" : "\r", id, (ConfigSettingMenu[id][g_b3D]) ? "MENU_ENABLED" : "MENU_DISABLED", id, "MENU_SETTINGS_CAMERA")
+	menu_additem(hSet, formatMsg, "5", 0)
+	
+	formatex(formatMsg, charsmax(formatMsg), "%L", id, "BACK")
+	menu_additem(hSet, formatMsg, "6", 0)
+	
+	menu_setprop(hSet, MPROP_EXIT, MEXIT_ALL)
+	menu_display(id, hSet, 0)
+	
+	return PLUGIN_HANDLED
+}
+
+public Handler_ShopTerrorist(id, hMenu, iItem)
+{
+	if(iItem == MENU_EXIT || !is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_CT)
+	{
+		menu_destroy(hMenu)
+		return PLUGIN_HANDLED
+	}
+	
+	if(g_bRoundEnd)
+	{
+		CantRightNow(id)
+		return PLUGIN_HANDLED
+	}
+
+	new szData[6], iAccess2, hCallback
+	menu_item_getinfo(hMenu, iItem, iAccess2, szData, 5, _, _, hCallback)
+	new iKey = str_to_num(szData)
+	new iUserFlag = get_user_flags(id)
+		
+	switch(iKey)
+	{
+		case 1: 
+		{
+			if(!ShopItem[id][g_HE] && !user_has_weapon(id,CSW_HEGRENADE))
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 30)
+				{
+					give_item(id, "weapon_hegrenade")
+					PrivatePlayerData[id][g_PlayerMoney] -= 30
+					ShopItem[id][g_HE] = true
+				}
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			}
+			else
+			{
+				youAlreadyHave(id, "hegrenade")
+			}
+			command_Shop(id)
+		}
+			
+		case 2:
+		{
+			if(!ShopItem[id][g_HP])
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 85)
+				{
+					new iGetUserHealth = pev(id, pev_health), iMaxHp = (iUserFlag & ADMIN_VIP) ? 200 : 150
+					
+					fm_set_user_health(id, iGetUserHealth + 50)
+					
+					ShopItem[id][g_HP] = true
+					PrivatePlayerData[id][g_PlayerMoney] -= 85
+					
+					iGetUserHealth = pev(id, pev_health)
+					
+					if(iGetUserHealth > iMaxHp)
+						fm_set_user_health(id, iMaxHp)
+						
+					EmitSnd(id, ItemBoughtSound)
+				}
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			}
+			else
+			{
+				youAlreadyHave(id, "50 Health")
+			}
+			command_Shop(id)
+		}
+		case 3: 
+		{
+			if(!ShopItem[id][g_SK])
+			{
+				if(iSuperKnifeCount >= SUPERKNIFE_BOUGHT_MAX)
+				{
+					if(!(iUserFlag & ADMIN_SVIP) && !(iUserFlag & ADMIN_VIP))
+					{
+						color_chat(id, "%L", id, "CHAT_SK_MAX_BOUGHT")
+						color_chat(id, "%L", id, "CHAT_SK_MAX_BOUGHT2")
+						return PLUGIN_HANDLED
+					}
+				}
+				
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 90)
+				{
+					ShopItem[id][g_SK] = true
+					PrivatePlayerData[id][g_PlayerMoney] -= 90
+
+					iSuperKnifeCount++
+					EmitSnd(id, ItemBoughtSound)
+						
+					color_chat(id, "%L", id, "CHAT_SK_BOUGHT")
+				} 
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			}
+			else 
+			{
+				youAlreadyHave(id, "SuperKnife")
+			}
+			command_Shop(id)
+		}
+		case 4:
+		{
+			if(!ShopItem[id][sleepgunitem] && !user_has_weapon(id,CSW_TMP))
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 85)
+				{
+					ShopItem[id][sleepgunitem] = true
+					ShopItem[id][sleepgunset] = true
+
+					PrivatePlayerData[id][g_PlayerMoney] -= 85
+					color_chat(id, "%L", id, "CHAT_SLEEPGUN_BOUGHT")
+					giveUserTmp(id)
+				}
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			}
+			else 
+			{
+				youAlreadyHave(id, "SleepGun")
+			}
+			command_Shop(id)
+		}
+		case 5: 
+		{
+			if(iUserFlag & ADMIN_VIP || iUserFlag & ADMIN_SVIP)
+			{
+				if(!SpecialItemActivated[id][g_bActived_Wallhang] && !SpecialItemActivated[id][g_bActived_SetWallHang])
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 55)
+					{
+						SpecialItemActivated[id][g_bActived_Wallhang] = true
+						SpecialItemActivated[id][g_bActived_SetWallHang] = true
+
+						PrivatePlayerData[id][g_PlayerMoney] -= 55
+						color_chat(id, "%L", id, "CHAT_WALLHANG_BOUGHT")
+						EmitSnd(id, ItemBoughtSound)
+					}
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					youAlreadyHave(id, "WallHang")
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_VIP)
+			}
+			command_Shop(id)	
+		}
+		case 6:
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				if(!user_has_weapon(id,CSW_SMOKEGRENADE) && !ShopItem[id][g_Teleport])
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 5)
+					{
+						give_item(id, "weapon_smokegrenade")
+						EmitSnd(id, ItemBoughtSound)
+						PrivatePlayerData[id][g_PlayerMoney] -= 5
+						ShopItem[id][g_Teleport] = true
+					}
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				}
+				else
+				{
+					youAlreadyHave(id, "Teleport")
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			command_Shop(id)
+		}
+	}
+	
+	if(iKey == 7)
+		Open_FurMenu(id)
+
+	else
+		cs_set_user_money(id,PrivatePlayerData[id][g_PlayerMoney],1)
+		
+	menu_destroy(hMenu)
+	
+	return PLUGIN_HANDLED
+}
+
+public Handler_ShopCounter(id, hMenu, iItem)
+{
+	if(iItem == MENU_EXIT || !is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_T)
+	{
+		menu_destroy(hMenu)
+		return PLUGIN_HANDLED
+	}
+	
+	if(g_bRoundEnd)
+	{
+		CantRightNow(id)
+		return PLUGIN_HANDLED
+	}
+	
+	new szData[6], iAccess2, hCallback
+	menu_item_getinfo(hMenu, iItem, iAccess2, szData, 5, _, _, hCallback)
+	new iKey = str_to_num(szData)
+	new iUserFlag = get_user_flags(id)
+		
+	switch(iKey)
+	{
+		case 1:
+		{
+			if(!ShopItem[id][g_Defuse])
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 5)
+				{
+					give_item(id, "item_thighpack")
+					PrivatePlayerData[id][g_PlayerMoney] -= 5
+					EmitSnd(id, ItemBoughtSound)
+					ShopItem[id][g_Defuse] = true
+				}
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			}
+			else
+			{
+				youAlreadyHave(id, "Defuse")
+			}
+			command_Shop(id)
+		}
+			
+		case 2: 
+		{
+			if(!ShopItem[id][g_SG] && !user_has_weapon(id,CSW_FLASHBANG))
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 20)
+				{
+					give_item(id, "weapon_flashbang")
+					PrivatePlayerData[id][g_PlayerMoney] -= 20
+					ShopItem[id][g_SG] = true
+				}
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			}
+					
+			else
+			{
+				youAlreadyHave(id, "Slow Grenade")
+			}
+			command_Shop(id)
+		}
+		case 3:
+		{
+			if(!ShopItem[id][g_HP])
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 85)
+				{
+					new iGetUserHealth = pev(id, pev_health), iMaxHp = (get_user_flags(id) & ADMIN_VIP) ? 200 : 150
+					
+					fm_set_user_health(id, iGetUserHealth + 50)
+					
+					ShopItem[id][g_HP] = true
+					PrivatePlayerData[id][g_PlayerMoney] -= 85
+					
+					iGetUserHealth = pev(id, pev_health)
+					
+					if(iGetUserHealth > iMaxHp)
+						fm_set_user_health(id, iMaxHp)
+						
+					EmitSnd(id, ItemBoughtSound)
+				}
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			}
+			else
+			{
+				youAlreadyHave(id, "50 Health")
+			}
+			command_Shop(id)
+		}
+		case 4:
+		{
+			if(!ShopItem[id][slowgunitem] && !user_has_weapon(id,CSW_TMP))
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 80)
+				{
+					ShopItem[id][slowgunitem] = true
+					ShopItem[id][slowgunset] = true
+					PrivatePlayerData[id][g_PlayerMoney] -= 80
+					color_chat(id, "%L", id, "CHAT_SLOWGUN_BOUGHT")
+					
+					giveUserTmp(id)
+				}
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			}
+			else 
+			{
+				youAlreadyHave(id, "SlowGun")
+			}
+			command_Shop(id)
+		}
+			
+		case 5:
+		{
+			if(iUserFlag & ADMIN_VIP || iUserFlag & ADMIN_SVIP)
+			{
+				if(!SpecialItemActivated[id][g_bActived_Speed])
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 90)
+					{
+						fm_set_user_speed(id, 420.0)
+						PrivatePlayerData[id][g_PlayerMoney] -= 90
+						SpecialItemActivated[id][g_bActived_Speed] = true
+						color_chat(id, "%L", id, "CHAT_SPEED_BOUGHT")
+						EmitSnd(id, ItemBoughtSound)
+					}
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					youAlreadyHave(id, "Speed")
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_VIP)
+			}
+			command_Shop(id)
+		}
+			
+		case 6:
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				if(!SpecialItemActivated[id][g_bActived_Radar])
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 25)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 25
+						SpecialItemActivated[id][g_bActived_Radar] = true
+						set_task(0.5, "fn_RadarScan", id+TASK_SHOW_RADAR,.flags = "b")
+						set_task(10.0, "Task_Radar", id + TASK_RADAR)
+						color_chat(id, "%L", id, "CHAT_RADAR_BOUGHT")
+						EmitSnd(id,ItemBoughtSound)
+					}
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				}
+				else 
+				{
+					youAlreadyHave(id, "Speed")
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			command_Shop(id)
+		}
+	}
+	
+	if(iKey == 7)
+		Open_FurMenu(id)
+	
+	else
+		cs_set_user_money(id,PrivatePlayerData[id][g_PlayerMoney],1)
+	
+	menu_destroy(hMenu)
+	
+	return PLUGIN_HANDLED
+}
+
+public Handler_ShopKnives(id, hMenu, iItem)
+{
+	if(iItem == MENU_EXIT || !is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_CT)
+	{
+		menu_destroy(hMenu)
+		return PLUGIN_HANDLED
+	}
+	
+	if(g_bRoundEnd)
+	{
+		CantRightNow(id)
+		return PLUGIN_HANDLED
+	}
+	
+	new szData[6], iAccess2, hCallback
+	menu_item_getinfo(hMenu, iItem, iAccess2, szData, 5, _, _, hCallback)
+	new iKey = str_to_num(szData)
+	new iUserFlag = get_user_flags(id)
+	
+	if(PrivatePlayerData[id][g_bSkinSelected])
+	{
+		if(iKey < 6)
+		{
+			color_chat(id, "%L", id, "CHAT_ALREADY_CHOOSED_KNIFE")
+			return PLUGIN_HANDLED
+		}
+	}
+	
+	switch(iKey)
+	{
+		case 1:
+		{
+			if(g_szKnife[id][TOTAL_KNIVES] != KNIFE_DEFAULT)
+			{
+				g_szKnife[id][TOTAL_KNIVES] = KNIFE_DEFAULT
+				EmitSnd(id,ItemBoughtSound)
+			}
+			else 
+			{
+				youAlreadyHave(id, "Normal knife")
+			}
+			Open_ShopKnives(id)
+		}
+		
+		case 2:
+		{
+			if(g_szKnife[id][TOTAL_KNIVES] != KNIFE_COMBAT)
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 15)
+				{
+					PrivatePlayerData[id][g_PlayerMoney] -= 15
+					fm_set_user_armor(id, pev(id, pev_armorvalue) + 10)
+					
+					g_szKnife[id][TOTAL_KNIVES] = KNIFE_COMBAT
+					EmitSnd(id,ItemBoughtSound)
+
+					PrivatePlayerData[id][g_bSkinSelected] = true
+				} 
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			} 
+			else 
+			{
+				youAlreadyHave(id, "Combat knife")
+			}
+			Open_ShopKnives(id)
+		}
+		
+		case 3: 
+		{
+			if(g_szKnife[id][TOTAL_KNIVES] != KNIFE_AXE)
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 25)
+				{
+					PrivatePlayerData[id][g_PlayerMoney] -= 25
+					fm_set_user_health(id, pev(id, pev_health) + 20)
+					
+					g_szKnife[id][TOTAL_KNIVES] = KNIFE_AXE
+					EmitSnd(id,ItemBoughtSound)
+
+					PrivatePlayerData[id][g_bSkinSelected] = true
+				} 
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			} 
+			else 
+			{
+				youAlreadyHave(id, "Axe knife")
+			}
+			Open_ShopKnives(id)
+		}
+
+		case 4:
+		{
+			if(iUserFlag & ADMIN_VIP || iUserFlag & ADMIN_SVIP)
+			{
+				if(g_szKnife[id][TOTAL_KNIVES] != KNIFE_SILVER)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 20)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 20
+						fm_set_user_health(id, pev(id, pev_health) + 10)
+						
+						g_szKnife[id][TOTAL_KNIVES] = KNIFE_SILVER
+						EmitSnd(id, ItemBoughtSound)
+	
+						PrivatePlayerData[id][g_bSkinSelected] = true
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					youAlreadyHave(id, "Silver knife")
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			Open_ShopKnives(id)
+		}
+		
+		case 5: 
+		{
+			if(iUserFlag & ADMIN_VIP || iUserFlag & ADMIN_SVIP)
+			{
+				if(g_szKnife[id][TOTAL_KNIVES] != KNIFE_HUNTER)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 40)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 40
+						
+						g_szKnife[id][TOTAL_KNIVES] = KNIFE_HUNTER
+						EmitSnd(id,ItemBoughtSound)
+	
+						PrivatePlayerData[id][g_bSkinSelected] = true
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					youAlreadyHave(id, "Hunter knife")
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			Open_ShopKnives(id)
+		}
+		
+		case 6: Open_ShopKnives2(id)
+		
+		case 7: Open_FurMenu(id)
+	}
+	
+	new weapon_ent; weapon_ent = fm_cs_get_current_weapon_ent(id)
+	if(pev_valid(weapon_ent))
+		replace_weapon_models(id, cs_get_weapon_id(weapon_ent))
+		
+	cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+	
+	return PLUGIN_HANDLED
+}
+
+public Handler_ShopKnives2(id, hMenu, iItem)
+{
+	if(iItem == MENU_EXIT || !is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_CT)
+	{
+		menu_destroy(hMenu)
+		return PLUGIN_HANDLED
+	}
+	
+	if(g_bRoundEnd)
+	{
+		CantRightNow(id)
+		return PLUGIN_HANDLED
+	}
+	
+	new szData[6], iAccess2, hCallback
+	menu_item_getinfo(hMenu, iItem, iAccess2, szData, 5, _, _, hCallback)
+	new iKey = str_to_num(szData)
+	new iUserFlag = get_user_flags(id)
+	
+	if(PrivatePlayerData[id][g_bSkinSelected] && iKey < 5)
+	{
+		color_chat(id,  "%L", id, "CHAT_ALREADY_CHOOSED_KNIFE")
+		return PLUGIN_HANDLED
+	}
+	
+	switch(iKey)
+	{
+		case 1: 
+		{
+			if(g_szKnife[id][TOTAL_KNIVES] != KNIFE_SPIRIT)
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 20)
+				{
+					PrivatePlayerData[id][g_PlayerMoney] -= 20
+					fm_set_user_health(id, pev(id, pev_health) + 5)
+					
+					g_szKnife[id][TOTAL_KNIVES] = KNIFE_SPIRIT
+					EmitSnd(id,ItemBoughtSound)
+
+					PrivatePlayerData[id][g_bSkinSelected] = true
+					
+				} 
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			} 
+			else 
+			{
+				youAlreadyHave(id, "Spirit knife")
+			}
+			Open_ShopKnives2(id)
+		}
+		
+		case 2: 
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				if(g_szKnife[id][TOTAL_KNIVES] != KNIFE_EPIC)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 30)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 30
+						
+						g_szKnife[id][TOTAL_KNIVES] = KNIFE_EPIC
+						EmitSnd(id,ItemBoughtSound)
+	
+						PrivatePlayerData[id][g_bSkinSelected] = true
+						
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					youAlreadyHave(id, "Epic knife")
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			Open_ShopKnives2(id)
+		}
+		
+		case 3:
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				if(g_szKnife[id][TOTAL_KNIVES] != KNIFE_CROWBAR)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 40)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 40
+						fm_set_user_health(id, pev(id, pev_health) + 10)
+						
+						g_szKnife[id][TOTAL_KNIVES] = KNIFE_CROWBAR
+						EmitSnd(id,ItemBoughtSound)
+	
+						PrivatePlayerData[id][g_bSkinSelected] = true
+						
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					youAlreadyHave(id, "Crowbar knife")
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			Open_ShopKnives2(id)
+		}
+		
+		case 4:
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				if(g_szKnife[id][TOTAL_KNIVES] != KNIFE_DEAD)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 50)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 50
+						
+						g_szKnife[id][TOTAL_KNIVES] = KNIFE_DEAD
+						EmitSnd(id,ItemBoughtSound)
+	
+						PrivatePlayerData[id][g_bSkinSelected] = true
+						
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					youAlreadyHave(id, "Dead knife")
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			Open_ShopKnives2(id)
+		}
+		
+		case 5: Open_ShopKnives(id)
+	}
+	
+	new weapon_ent; weapon_ent = fm_cs_get_current_weapon_ent(id)
+	if(pev_valid(weapon_ent))
+		replace_weapon_models(id, cs_get_weapon_id(weapon_ent))
+		
+	cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+	
+	return PLUGIN_HANDLED
+}
+
+public Handler_ItemsTerrorist(id, hMenu, iItem)
+{
+	if(iItem == MENU_EXIT || !is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_CT)
+	{
+		menu_destroy(hMenu)
+		return PLUGIN_HANDLED
+	}
+		
+	if(g_bRoundEnd)
+	{
+		CantRightNow(id)
+		return PLUGIN_HANDLED
+	}
+	
+	new szData[6], iAccess2, hCallback
+	menu_item_getinfo(hMenu, iItem, iAccess2, szData, 5, _, _, hCallback)
+	new iKey = str_to_num(szData)
+	new iUserFlag = get_user_flags(id)
+	
+	switch(iKey)
+	{
+		case 1:
+		{
+			if(SpecialItem[id][g_RG] != 1)
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 16000)
+				{
+					PrivatePlayerData[id][g_PlayerMoney] -= 16000
+					cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+					
+					SpecialItem[id][g_RG] = 1
+					
+					ScreenFade(id, 4500, 0, 0, 255, 255, 255, 75)
+					
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				} 
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			} 
+			else 
+			{
+				if(g_szItem[id][TOTAL_ITEMS] == ITEM_REGEN)
+				{
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+				} 
+				else 
+				{
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					g_szItem[id][TOTAL_ITEMS] = ITEM_REGEN
+				}
+				
+				client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				
+				if(g_szItem[id][TOTAL_ITEMS] == ITEM_REGEN)
+					set_task(1.0, "Task_HealthRegen", id + TASK_REGEN)
+			}
+			command_Items(id)
+		}
+		
+		case 2:
+		{
+			if(SpecialItem[id][g_ND] != 1)
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 14000)
+				{
+					PrivatePlayerData[id][g_PlayerMoney] -= 14000
+					cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+					
+					SpecialItem[id][g_ND] = 1
+
+					ScreenFade(id, 4500, 0, 0, 255, 255, 255, 75)
+					
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				} 
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			} 
+			else 
+			{
+				if(g_szItem[id][TOTAL_ITEMS] == ITEM_NO_DAMAGE)
+				{
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+				} 
+				else 
+				{
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NO_DAMAGE
+				}
+				client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+			}
+			command_Items(id)
+		}
+		
+		case 3:
+		{
+			if(SpecialItem[id][g_CO] != 1)
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 15000)
+				{
+					PrivatePlayerData[id][g_PlayerMoney] -= 15000
+					cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+					
+					SpecialItem[id][g_CO] = 1
+
+					ScreenFade(id, 4500, 0, 0, 255, 255, 255, 75)
+					
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				} 
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			} 
+			else 
+			{
+				if(g_szItem[id][TOTAL_ITEMS] == ITEM_CONFUSED)
+				{
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+				} 
+				else 
+				{
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					g_szItem[id][TOTAL_ITEMS] = ITEM_CONFUSED
+				}
+			}
+			command_Items(id)
+		}
+		
+		case 4:
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				if(SpecialItem[id][g_IR] != 1)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 18000)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 18000
+						cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+						
+						SpecialItem[id][g_IR] = 1
+
+						ScreenFade(id, 4500, 0, 0, 255, 255, 255, 75)
+						
+						client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					SpecialItemActivated[id][g_bActived_Immor] = true
+					SpecialItemActivated[id][g_bActived_GodMode] = true
+						
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					g_szItem[id][TOTAL_ITEMS] = ITEM_IMMORTALITY
+						
+					if(g_szItem[id][TOTAL_ITEMS] == ITEM_IMMORTALITY)
+					{
+						set_task(1.0, "Task_Immor", id + TASK_IMMOR, .flags = "b")
+					}
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			command_Items(id)
+		}
+		
+		case 5:
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				if(SpecialItem[id][g_MJ] != 1)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 16000)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 16000
+						cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+						
+						SpecialItem[id][g_MJ] = 1
+
+						ScreenFade(id, 4500, 0, 0, 255, 255, 255, 75)
+						
+						client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+					} 
+					else
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					if(g_szItem[id][TOTAL_ITEMS] == ITEM_MULTI_JUMP)
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					} 
+					else 
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+						g_szItem[id][TOTAL_ITEMS] = ITEM_MULTI_JUMP
+					}
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_VIP)
+			}
+			command_Items(id)
+		}
+		
+		case 6: Open_FurMenu(id)
+	}
+	
+	if(g_szItem[id][TOTAL_ITEMS] != ITEM_REGEN || g_szItem[id][TOTAL_ITEMS] != ITEM_IMMORTALITY)
+	{
+		if(g_szItem[id][TOTAL_ITEMS] != ITEM_IMMORTALITY)
+		{
+			if(task_exists(id + TASK_IMMOR))
+				remove_task(id + TASK_IMMOR)
+		}
+		if(g_szItem[id][TOTAL_ITEMS] != ITEM_REGEN)
+		{
+			if(task_exists(id + TASK_REGEN))
+				remove_task(id + TASK_REGEN)
+		}
+	}
+
+	menu_destroy(hMenu)
+	
+	return PLUGIN_HANDLED
+}
+
+public Handler_ItemsCounter(id, hMenu, iItem)
+{
+	if(iItem == MENU_EXIT || !is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_T)
+	{
+		menu_destroy(hMenu)
+		return PLUGIN_HANDLED
+	}
+		
+	if(g_bRoundEnd)
+	{
+		CantRightNow(id)
+		return PLUGIN_HANDLED
+	}
+	
+	new szData[6], iAccess2, hCallback
+	menu_item_getinfo(hMenu, iItem, iAccess2, szData, 5, _, _, hCallback)
+	new iKey = str_to_num(szData)
+	new iUserFlag = get_user_flags(id)
+	
+	switch(iKey)
+	{
+		case 1:
+		{
+			if(SpecialItem[id][g_RG] != 1)
+			{
+				if(PrivatePlayerData[id][g_PlayerMoney] >= 16000)
+				{
+					PrivatePlayerData[id][g_PlayerMoney] -= 16000
+					cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+					
+					SpecialItem[id][g_RG] = 1
+
+					ScreenFade(id, (300 * 15), 0, 0, 255, 255, 255, 75)
+					
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				} 
+				else 
+				{
+					noMoneyfunc(id)
+				}
+			} 
+			else 
+			{
+				if(g_szItem[id][TOTAL_ITEMS] == ITEM_REGEN)
+				{
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+				} 
+				else 
+				{
+					g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					g_szItem[id][TOTAL_ITEMS] = ITEM_REGEN
+				}
+				
+				client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				
+				if(g_szItem[id][TOTAL_ITEMS] == ITEM_REGEN)
+				{
+					set_task(1.0, "Task_HealthRegen", id + TASK_REGEN)
+				} 
+			}
+			command_Items(id)
+		}
+		
+		case 2:
+		{
+			if(iUserFlag & ADMIN_VIP || iUserFlag & ADMIN_SVIP)
+			{
+				if(SpecialItem[id][g_IB] != 1)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 17000)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 17000
+						cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+						
+						SpecialItem[id][g_IB] = 1
+
+						ScreenFade(id, (300 * 15), 0, 0, 255, 255, 255, 75)
+						
+						client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					if(g_szItem[id][TOTAL_ITEMS] == ITEM_IMMOBILIZE)
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					} 
+					else 
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+						g_szItem[id][TOTAL_ITEMS] = ITEM_IMMOBILIZE
+					}
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_VIP)
+			}
+			command_Items(id)
+		}
+		
+		case 3:
+		{
+			if(iUserFlag & ADMIN_VIP || iUserFlag & ADMIN_SVIP)
+			{
+				if(SpecialItem[id][g_WE] != 1)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 13000)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 13000
+						cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+						
+						SpecialItem[id][g_WE] = 1
+
+						ScreenFade(id, (300 * 15), 0, 0, 255, 255, 255, 75)
+						
+						client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					if(g_szItem[id][TOTAL_ITEMS] == ITEM_WISE_EYE)
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					} 
+					else 
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+						g_szItem[id][TOTAL_ITEMS] = ITEM_WISE_EYE
+					}
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_VIP)
+			}
+			command_Items(id)
+		}
+		
+		case 4:
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				if(SpecialItem[id][g_BH] != 1)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 19000)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 19000
+						cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+						
+						SpecialItem[id][g_BH] = 1
+
+						ScreenFade(id, (300 * 15), 0, 0, 255, 255, 255, 75)
+						
+						client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					if(g_szItem[id][TOTAL_ITEMS] == ITEM_BUNNYHOP)
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					} 
+					else 
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+						g_szItem[id][TOTAL_ITEMS] = ITEM_BUNNYHOP
+					}
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			command_Items(id)
+		}
+		
+		case 5:
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				if(SpecialItem[id][g_MJ] != 1)
+				{
+					if(PrivatePlayerData[id][g_PlayerMoney] >= 16000)
+					{
+						PrivatePlayerData[id][g_PlayerMoney] -= 16000
+						cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+						
+						SpecialItem[id][g_MJ] = 1
+
+						ScreenFade(id, (300 * 15), 0, 0, 255, 255, 255, 75)
+						
+						client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+					} 
+					else 
+					{
+						noMoneyfunc(id)
+					}
+				} 
+				else 
+				{
+					if(g_szItem[id][TOTAL_ITEMS] == ITEM_MULTI_JUMP)
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+					} 
+					else 
+					{
+						g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+						g_szItem[id][TOTAL_ITEMS] = ITEM_MULTI_JUMP
+					}
+					
+					client_cmd(id,"spk ^"%s^"",SpecialItemBoughtSound)
+				}
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+			}
+			command_Items(id)
+		}
+		
+		case 6: Open_FurMenu(id)
+	}
+	
+	if(g_szItem[id][TOTAL_ITEMS] != ITEM_REGEN)
+	{
+		if(task_exists(id + TASK_REGEN))
+			remove_task(id + TASK_REGEN)
+	}
+		
+	menu_destroy(hMenu)
+	
+	return PLUGIN_HANDLED
+}
+
+public Handler_Primary(id, hMenu, iItem)
+{
+	if(!is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_T)
+	{
+		return PLUGIN_HANDLED
+	}
+	
+	if(g_bRoundEnd)
+	{
+		CantRightNow(id)
+		return PLUGIN_HANDLED
+	}
+	
+	new iUserFlag = get_user_flags(id)
+	
+	if(PrivatePlayerData[id][g_PlayerMoney] >= AntiFurienPWeapons[iItem][iPWeaponCost])
+	{
+		strip_user_weapons(id)
+		give_item(id,"weapon_flashbang")
+		give_item(id,"weapon_knife")
+		
+		if(iUserFlag & ADMIN_SVIP)
+		{
+			if(get_playersnum() > get_pcvar_num(pCvars[pCvarMinPlayers]) && !user_has_weapon(id,CSW_TMP))
+			{
+				giveUserTmp(id)
+			}
+		}
+		
+		UserFurienBase[id][g_bWeapons] = true
+		Open_Secondary(id)
+		
+		if(iItem != 7)
+		{
+	 		give_item(id, AntiFurienPWeapons[iItem][szPWeaponIndex])
+			cs_set_user_bpammo(id, AntiFurienPWeapons[iItem][szPWeaponType], AntiFurienPWeapons[iItem][iPWeaponBpAmmo])
+			
+			if((iItem == 0) || (iItem == 1))
+				color_chat(id, "%L", id, "CHAT_BAD_WEAPON")
+			else
+			{
+				PrivatePlayerData[id][g_PlayerMoney] -= AntiFurienPWeapons[iItem][iPWeaponCost]
+				cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+			}
+		}
+		else
+		{
+			if(iUserFlag & ADMIN_SVIP)
+			{
+				PrivatePlayerData[id][g_PlayerMoney] -= AntiFurienPWeapons[iItem][iPWeaponCost]
+				cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+
+				give_item(id, AntiFurienPWeapons[iItem][szPWeaponName])
+				cs_set_user_bpammo(id, AntiFurienPWeapons[iItem][szPWeaponType], AntiFurienPWeapons[iItem][iPWeaponBpAmmo])
+			
+				UserFurienBase[id][g_bWeapons] = true
+				Open_Secondary(id)
+			}
+			else
+			{
+				noAccessfunc(id,ADMIN_SVIP)
+				Open_Primary(id)
+			} 
+		}
+	}
+	else 
+	{
+		noMoneyfunc(id)
+		Open_Primary(id)
+	}
+	
+	return PLUGIN_HANDLED
+}
+
+public Handler_Secondary(id, hMenu, iItem)
+{
+	if(iItem == MENU_EXIT || !is_user_alive(id) || cs_get_user_team(id) == CS_TEAM_T)
+	{
+		return PLUGIN_HANDLED
+	}
+	
+	if(g_bRoundEnd)
+	{
+		CantRightNow(id)
+		return PLUGIN_HANDLED
+	}
+	
+	if(PrivatePlayerData[id][g_PlayerMoney] >= AntiFurienSWeapons[iItem][iSWeaponCost])
+	{
+		if((iItem != 0) || (iItem != 1))
+		{
+			PrivatePlayerData[id][g_PlayerMoney] -= AntiFurienSWeapons[iItem][iSWeaponCost]
+			cs_set_user_money(id, PrivatePlayerData[id][g_PlayerMoney],1)
+		}
+		
+		give_item(id, AntiFurienSWeapons[iItem][szSWeaponIndex])
+		cs_set_user_bpammo(id, AntiFurienSWeapons[iItem][szSWeaponType], AntiFurienSWeapons[iItem][iSWeaponBpAmmo])
+	
+		if(!ConfigSettingMenu[id][g_bFMenu])
+			Open_FurMenu(id)
+	} 
+	else 
+	{
+		noMoneyfunc(id)
+		Open_Secondary(id)
+	}
+		
+	return PLUGIN_HANDLED
+}
+
+public Handler_FurMenu(id, hMenu, iItem)
+{
+	if(!is_user_alive(id))
+	{
+		menu_destroy(hMenu)
+		return PLUGIN_HANDLED
+	}
+	
+	new szData[6], iAccess2, hCallback
+	menu_item_getinfo(hMenu, iItem, iAccess2, szData, 5, _, _, hCallback)
+	new iKey = str_to_num(szData)
+	
+	switch(iKey)
+	{
+		case 1: Open_ShopKnives(id)
+		
+		case 2: 
+		{
+			if(!UserFurienBase[id][g_bWeapons])
+			{
+				Open_Primary(id)
+			} 
+			else 
+			{
+				Open_FurMenu(id)
+				color_chat(id, "%L", id, "CHAT_ALREADY_SELECTEC_THE_EQUIPAMENT")
+				client_print(id, print_center,"%L", id, "CHAT_ALREADY_SELECTEC_THE_EQUIPAMENT")
+			}
+		}
+		
+		case 3: command_Shop(id)
+		
+		case 4: command_Items(id)
+
+		case 5: 
+		{
+			new szMotdLink[60]
+			get_pcvar_string(pCvars[pCvarMotdLink], szMotdLink, charsmax(szMotdLink))
+			
+			show_motd(id, szMotdLink, "Info")
+			client_cmd(id,"spk buttons/lightswitch2")
+		}
+		
+		case 6: Open_Setting(id)
+	}
+	
+	menu_destroy(hMenu)
+	return PLUGIN_HANDLED
+}
+
+public Handler_Setting(id, hMenu, iItem)
+{
+	if(!is_user_alive(id))
+	{
+		menu_destroy(hMenu)
+		return PLUGIN_HANDLED
+	}
+	
+	new szData[6], iAccess2, hCallback
+	menu_item_getinfo(hMenu, iItem, iAccess2, szData, 5, _, _, hCallback)
+	new iKey = str_to_num(szData)
+	
+	switch(iKey)
+	{
+		case 1:
+		{
+			ConfigSettingMenu[id][g_bFMenu] = (ConfigSettingMenu[id][g_bFMenu]) ? false : true
+			Open_Setting(id)
+		}
+		
+		case 2:
+		{
+			ConfigSettingMenu[id][g_bEffect] = (ConfigSettingMenu[id][g_bEffect]) ? false : true
+			Open_Setting(id)
+		}
+		
+		case 3:
+		{
+			ConfigSettingMenu[id][g_bSkins] = (ConfigSettingMenu[id][g_bSkins]) ? false : true
+			
+			new weapon_ent; weapon_ent = fm_cs_get_current_weapon_ent(id)
+			if(pev_valid(weapon_ent))
+				replace_weapon_models(id, cs_get_weapon_id(weapon_ent))
+				
+			Open_Setting(id)
+		}
+		
+		case 4:
+		{
+			client_cmd(id, "mp3 stop")
+			if(ConfigSettingMenu[id][g_bStartSound])
+			{
+				ConfigSettingMenu[id][g_bStartSound] = false
+			}
+			else
+			{
+				color_chat(id,"%L", id, "CHAT_SPAWN_FIRST_MESSAGE")
+				new buffer = belo_random(sizeof g_MusicList)
+				client_cmd(id, "mp3 play %s", g_MusicList[buffer])
+				ConfigSettingMenu[id][g_bStartSound] = true
+			}
+			Open_Setting(id)
+		}
+		case 5:
+		{
+			if(cs_get_user_team(id) == CS_TEAM_T)
+			{
+				ConfigSettingMenu[id][g_b3D] = (ConfigSettingMenu[id][g_b3D]) ? false : true
+				set_view(id,(ConfigSettingMenu[id][g_b3D]) ? CAMERA_3RDPERSON : CAMERA_NONE)
+			}
+			else
+			{
+				color_chat(id,"%L", id, "CHAT_SHOULD_BE_FURIEN")
+			}
+			Open_Setting(id)
+		}
+		case 6:
+		{
+			Open_FurMenu(id)
+		}
+	}
+	
+	menu_destroy(hMenu)
+	return PLUGIN_HANDLED
+}
+
+public admin_m_handler(id,menu,item)
+{
+	switch(item)
+	{
+		case 0: Msg_Menu(id)
+		case 1:
+		{
+			client_cmd(id,"gal_startvote")
+			AdminMenu(id)
+		}
+		case 2: client_cmd(id,"amxmodmenu")
+		case 3: RestartAllData()
+		case 4:
+		{
+			if(!g_Grab[id])
+				client_cmd(id,"+grab")
+
+			else
+				client_cmd(id,"-grab")
+
+			AdminMenu(id)
+		}
+	}
+	menu_destroy(menu)
+}
+public msg_handler(id, menu, item)
+{
+	switch(item)
+	{
+		case 0:
+		{
+			client_cmd(id,"say @@g (T) -> PLANT/PICKUP | (CT) -> DEFUSE/PROTECT")
+			Msg_Menu(id)
+		}
+		case 1:
+		{
+			client_cmd(id,"say @@g RULES -> NO CAMP, CHEAT, BAD WORDS, INSULTS^nTXT, FLOOD, DISCLOSURES")
+			Msg_Menu(id)
+		}
+		case 2:
+		{
+			client_cmd(id,"say @@g CAMP, CHEAT, BAD WORDS, INSULTS, TXT, FLOOD, DISCLOSURES -> KICK/BAN")
+			Msg_Menu(id)
+		}
+		case 3:
+		{
+			new szContact[45]
+			get_pcvar_string(pCvars[pCvarContact], szContact, charsmax(szContact))
+
+			client_cmd(id,"say @@g %s", szContact)
+			Msg_Menu(id)
+		}
+		case 4:
+		{
+			AdminMenu(id)
+		}
+	}
+	menu_destroy(menu)
+}
+
+public grab_on(id)
+{
+	if(~get_user_flags(id) & ADMIN_SVIP || ~get_user_flags(id) & ADMIN_IMMUNITY)
+	{
+		console_print(id,"You have not access to this command!")
+		return PLUGIN_HANDLED
+	}
+
+	if(grab[id])
+	{
+		console_print(id,"You already are grabbind a player.")
+		return PLUGIN_HANDLED
+	}
+
+	grab[id]=-1
+
+	static target, trash
+	target=0
+	get_user_aiming(id,target,trash)
+	if(target && pev_valid(target) && target!=id)
+	{
+		if(target<=g_iMaxPlayers)
+		{
+			if(is_user_alive(target))
+			{
+				if(!(get_user_flags(target) & ADMIN_IMMUNITY))
+				{
+					g_Grab[id] = true
+					AdminMenu(id)
+					grabem(id,target)
+				}
+			}
+		}
+		else if(pev(target,pev_solid)!=4)
+		{
+			g_Grab[id] = true
+			AdminMenu(id)
+			grabem(id,target)
+		}
+	}
+	else
+	{
+		set_task(0.1,"grab_on2",id)
+	}
+	return PLUGIN_CONTINUE
+}
+
+public grab_on2(id)
+{
+	if(is_user_connected(id))
+	{
+		static target, trash
+		target=0
+		get_user_aiming(id,target,trash)
+		if(target && pev_valid(target) && target!=id)
+		{
+			if(target<=g_iMaxPlayers)
+			{
+				if(is_user_alive(target) && !(get_user_flags(target) & ADMIN_IMMUNITY))
+				{
+					g_Grab[id] = true
+					AdminMenu(id)
+					grabem(id,target)
+				}
+			}
+			else if(pev(target,pev_solid)!=4)
+			{
+				g_Grab[id] = true
+				AdminMenu(id)
+				grabem(id,target)
+			}
+		}
+		else
+		{
+			set_task(0.1,"grab_on2",id)
+		}
+	}
+}
+
+public grabem(id,target)
+{
+	grab[id]=target
+	
+	set_rendering2(target,kRenderFxGlowShell,255,0,0,kRenderTransAlpha,70)
+	
+	set_task(0.1,"grab_prethink",id+1000,"",0,"b")
+	
+	set_user_gravity(target,0.0)
+		
+	grab_totaldis[id] = 0.0
+	
+	grab_prethink(id+1000)
+}
+
+public grab_off(id)
+{
+	if(is_user_connected(id))
+	{
+		if(grab[id]==-1)
+		{
+			g_Grab[id] = false
+			AdminMenu(id)
+			grab[id]=0
+		}
+		else if(grab[id])
+		{
+			g_Grab[id] = false
+			AdminMenu(id)
+
+			set_rendering2(grab[id])
+			
+			if(grab[id]<=g_iMaxPlayers && is_user_alive(grab[id]))
+				if(cs_get_user_team(grab[id]) == CS_TEAM_T)
+					fm_set_user_grav(grab[id], get_pcvar_float(_:pCvars[pCvarFurienGrav]))
+					
+				else
+					fm_set_user_grav(grab[id], 1.0)
+				
+			AdminIndex[grab[id]] = id
+	
+			set_task(4.0, "showAdv", grab[id]+TASK_GRAB)
+			grab[id] = 0
+		}
+	}
+	return PLUGIN_CONTINUE
+}
+
+public showAdv(id)
+{
+	id -= TASK_GRAB
+
+	set_hudmessage(255, 255, 255, -1.0, 0.30, 0, 1.0, 2.0)
+	ShowSyncHudMsg(id, HudSync[hudAdv],"%L", id, "HUD_GRAB_ADV", PrivatePlayerData[AdminIndex[id]][g_szName])
+
+	client_print(id, print_center, "%L", id, "HUD_GRAB_ADV", PrivatePlayerData[AdminIndex[id]][g_szName])
+}
+
+public grab_prethink(id)
+{
+	id -= 1000
+	if(!is_user_connected(id) && grab[id] > 0)
+	{
+		set_rendering2(grab[id])
+		
+		if(grab[id] <= g_iMaxPlayers && is_user_alive(grab[id])) 
+			fm_set_user_grav(grab[id],1.0)
+			
+		grab[id]=0
+	}
+	if(grab[id] <= 0)
+	{
+		remove_task(id+1000)
+		return PLUGIN_HANDLED
+	}
+	
+	static origin1[3]
+	get_user_origin(id,origin1)
+	static Float:origin2_F[3], origin2[3]
+	pev(grab[id],pev_origin,origin2_F)
+	origin2[0] = floatround(origin2_F[0])
+	origin2[1] = floatround(origin2_F[1])
+	origin2[2] = floatround(origin2_F[2])
+	
+	static origin3[3]
+	get_user_origin(id,origin3,3)
+
+	static Float:origin1_F[3]
+	static Float:origin3_F[3]
+	origin1_F[0] = float(origin1[0])
+	origin1_F[1] = float(origin1[1])
+	origin1_F[2] = float(origin1[2])
+	origin3_F[0] = float(origin3[0])
+	origin3_F[1] = float(origin3[1])
+	origin3_F[2] = float(origin3[2])
+
+	static Float:distance[3]
+
+	if(!grab_totaldis[id])
+	{
+		distance[0] = floatabs(origin1_F[0] - origin2_F[0])
+		distance[1] = floatabs(origin1_F[1] - origin2_F[1])
+		distance[2] = floatabs(origin1_F[2] - origin2_F[2])
+		grab_totaldis[id] = floatsqroot(distance[0]*distance[0] + distance[1]*distance[1] + distance[2]*distance[2])
+	}
+	distance[0] = origin3_F[0] - origin1_F[0]
+	distance[1] = origin3_F[1] - origin1_F[1]
+	distance[2] = origin3_F[2] - origin1_F[2]
+
+	static Float:grab_totaldis2
+	grab_totaldis2 = floatsqroot(distance[0]*distance[0] + distance[1]*distance[1] + distance[2]*distance[2])
+
+	static Float:que
+	que = grab_totaldis[id] / grab_totaldis2
+
+	static Float:origin4[3]
+	origin4[0] = (distance[0] * que) + origin1_F[0]
+	origin4[1] = (distance[1] * que) + origin1_F[1]
+	origin4[2] = (distance[2] * que) + origin1_F[2]
+
+	static Float:velocity[3]
+	velocity[0] = (origin4[0] - origin2_F[0]) * (get_pcvar_float(_:pCvars[pCvarGrabSpeed]) / 1.666667)
+	velocity[1] = (origin4[1] - origin2_F[1]) * (get_pcvar_float(_:pCvars[pCvarGrabSpeed]) / 1.666667)
+	velocity[2] = (origin4[2] - origin2_F[2]) * (get_pcvar_float(_:pCvars[pCvarGrabSpeed]) / 1.666667)
+
+	set_pev(grab[id],pev_velocity,velocity)
+
+	return PLUGIN_CONTINUE
+}
+
+public Task_HealthRegen(id)
+{
+	id -= TASK_REGEN
+	
+	if(is_user_connected(id))
+	{
+		new iHealth = get_user_health(id), iFlag = get_user_flags(id)
+		
+		if(cs_get_user_team(id) == CS_TEAM_T)
+		{
+			if((iFlag & ADMIN_SVIP) || (iFlag & ADMIN_VIP))
+			{
+				set_user_health(id, clamp(iHealth + 2, 0, iFlag & ADMIN_SVIP ? 120 : 110))
+				return PLUGIN_HANDLED
+			}
+		}
+		set_user_health(id, clamp(iHealth + 2, 0, 100))
+	
+		set_task(1.0,"Task_HealthRegen",id+TASK_REGEN)
+	}
+	return PLUGIN_HANDLED
+}
+public Task_Immor(id)
+{
+	id -= TASK_IMMOR
+	
+	if(is_user_alive(id) || get_user_health(id) >= 15)
+	{
+		set_user_health(id,get_user_health(id) - 15)
+	}
+	else
+	{
+		SpecialItemActivated[id][g_bActived_GodMode] = false
+		
+		remove_task(id + TASK_IMMOR)
+		
+		if(g_szItem[id][TOTAL_ITEMS] == ITEM_IMMORTALITY)
+			g_szItem[id][TOTAL_ITEMS] = ITEM_NONE
+	}
+}
+
+public Task_ResetModel(id)
+{
+	SpecialItemActivated[id][g_bActived_Hit] = false
+	remove_task(id)
+}
+
+public Task_Radar(id)
+{
+	id -= TASK_RADAR
+	
+	if(task_exists(id+TASK_REMOVE_RADAR))
+		remove_task(id+TASK_REMOVE_RADAR)
+	
+	SpecialItemActivated[id][g_bActived_Radar] = false
+	color_chat(id, "%L", id, "CHAT_RADAR_DISABLED")
+}
+
+public fw_UpdateClientData_Post(id, sendweapons, cd_handle)
+{
+	if(!is_user_alive(id))
+		return FMRES_IGNORED	
+		
+	if(get_user_weapon(id) == CSW_TMP)
+		set_cd(cd_handle, CD_flNextAttack, get_gametime() + 0.001) 
+	
+	return FMRES_HANDLED
+}
+
+public fw_PlaybackEvent(flags, invoker, eventid, Float:delay, Float:origin[3], Float:angles[3], Float:fparam1, Float:fparam2, iParam1, iParam2, bParam1, bParam2)
+{
+	if(!is_user_connected(invoker))
+		return FMRES_IGNORED
+		
+	if(ShopItem[invoker][sleepgunset] || ShopItem[invoker][slowgunset])
+	{
+		if(get_user_weapon(invoker) == CSW_TMP)
+		{	
+			engfunc(EngFunc_PlaybackEvent, flags | FEV_HOSTONLY, invoker, eventid, delay, origin, angles, fparam1, fparam2, iParam1, iParam2, bParam1, bParam2)
+
+			EmitSnd(invoker,cs_get_user_team(invoker) == CS_TEAM_T ? SleepGun_Sounds : SlowGun_Sounds)
+			return FMRES_SUPERCEDE
+		}
+	}
+	return FMRES_IGNORED
+}
+
+replace_weapon_models(id, weaponid)
+{
+	if(!is_user_connected(id))
+		return
+	
+	static CsTeams:team; team = cs_get_user_team(id)
+	
+	switch(weaponid)
+	{
+		case CSW_TMP:
+		{
+			if(cs_get_user_team(id) == CS_TEAM_CT)
+			{
+				if(ShopItem[id][slowgunset])
+				{
+					set_pev(id, pev_weaponmodel2, p_slowgun)
+					set_pev(id, pev_viewmodel2, slowgun)
+				}
+			}
+			
+			if(cs_get_user_team(id) == CS_TEAM_T)
+			{
+				if(ShopItem[id][sleepgunset])
+				{
+					set_pev(id, pev_weaponmodel2, p_sleepgun)
+					set_pev(id, pev_viewmodel2, sleepgun)
+				}
+			}
+		}
+		case CSW_SMOKEGRENADE:
+		{
+			if(cs_get_user_team(id) == CS_TEAM_T)
+			{
+				set_pev(id, pev_viewmodel2, WeaponSkins[V_SMOKEGRENADE_V])
+				set_pev(id, pev_weaponmodel2, WeaponSkins[V_SMOKEGRENADE_P])
+			}
+		}
+	}
+	
+	if(ConfigSettingMenu[id][g_bSkins])
+	{
+		switch(weaponid)
+		{
+			case CSW_KNIFE:
+			{
+				switch(team)
+				{
+					case CS_TEAM_T:
+					{
+						switch(g_szKnife[id][TOTAL_KNIVES])
+						{
+							case KNIFE_COMBAT:
+							{
+								set_pev(id, pev_viewmodel2, Knives[3])
+								set_pev(id, pev_weaponmodel2, Knives[2])
+							}
+							case KNIFE_AXE:
+							{
+								set_pev(id, pev_viewmodel2, Knives[1])
+								set_pev(id, pev_weaponmodel2, Knives[0])
+							}
+							case KNIFE_SILVER:
+							{
+								set_pev(id, pev_viewmodel2, Knives[5])
+								set_pev(id, pev_weaponmodel2, Knives[4])
+							}
+							case KNIFE_HUNTER:
+							{
+								set_pev(id, pev_viewmodel2, Knives[7])
+								set_pev(id, pev_weaponmodel2, Knives[6])
+							}
+							case KNIFE_SPIRIT:
+							{
+								set_pev(id, pev_viewmodel2, Knives[8])
+							}
+							case KNIFE_EPIC:
+							{
+								set_pev(id, pev_viewmodel2, Knives[10])
+								set_pev(id, pev_weaponmodel2, Knives[9])
+							}
+							case KNIFE_CROWBAR:
+							{
+								set_pev(id, pev_viewmodel2, Knives[12])
+								set_pev(id, pev_weaponmodel2, Knives[11])
+							}
+							case KNIFE_DEAD:
+							{
+								set_pev(id, pev_viewmodel2, Knives[14])
+								set_pev(id, pev_weaponmodel2, Knives[13])
+							}
+							default:
+							{
+								set_pev(id, pev_viewmodel2, WeaponSkins[V_KNIFE_T])
+							}
+						}
+					}
+					case CS_TEAM_CT:
+					{
+						set_pev(id, pev_viewmodel2, WeaponSkins[V_KNIFE_CT])
+					}
+				}
+			}
+
+			case CSW_AWP:		set_pev(id, pev_viewmodel2, WeaponSkins[V_AWP])
+			case CSW_M4A1:		set_pev(id, pev_viewmodel2, WeaponSkins[V_M4A1])
+			case CSW_AK47:		set_pev(id, pev_viewmodel2, WeaponSkins[V_AK47])
+			case CSW_FAMAS:		set_pev(id, pev_viewmodel2, WeaponSkins[V_FAMAS])
+			case CSW_M249:		set_pev(id, pev_viewmodel2, WeaponSkins[V_M249])
+			case CSW_MP5NAVY:	set_pev(id, pev_viewmodel2, WeaponSkins[V_MP5])
+			case CSW_UMP45:		set_pev(id, pev_viewmodel2, WeaponSkins[V_UMP45])
+			case CSW_M3:		set_pev(id, pev_viewmodel2, WeaponSkins[V_M3])
+			case CSW_C4:		set_pev(id, pev_viewmodel2, WeaponSkins[V_C4])
+			case CSW_DEAGLE:	set_pev(id, pev_viewmodel2, WeaponSkins[V_DEAGLE])
+			case CSW_USP:		set_pev(id, pev_viewmodel2, WeaponSkins[V_USP])
+			case CSW_GLOCK18:	set_pev(id, pev_viewmodel2, WeaponSkins[V_GLOCK18])
+			case CSW_ELITE:		set_pev(id, pev_viewmodel2, WeaponSkins[V_ELITE])
+			case CSW_FIVESEVEN:	set_pev(id, pev_viewmodel2, WeaponSkins[V_FIVESEVEN])
+			case CSW_HEGRENADE:
+			{
+				set_pev(id, pev_viewmodel2, WeaponSkins[V_HEGRENADE_V])
+				set_pev(id, pev_weaponmodel2, WeaponSkins[V_HEGRENADE_P])
+			}
+			case CSW_FLASHBANG:
+			{
+				set_pev(id, pev_viewmodel2, WeaponSkins[V_FLASHBANG_V])
+				set_pev(id, pev_weaponmodel2, WeaponSkins[V_FLASHBANG_P])
+			}
+		}
+	}
+	else
+	{
+		switch(weaponid)
+		{
+			case CSW_KNIFE:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_knife.mdl")
+				set_pev(id, pev_weaponmodel2, "models/p_knife.mdl")
+			}
+			case CSW_UMP45:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_ump45.mdl")
+			}
+			case CSW_M3:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_xm1014.mdl")
+			}
+			case CSW_AWP:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_awp.mdl")
+			}
+			case CSW_MP5NAVY:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_mp5.mdl")
+			}
+			case CSW_AK47:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_ak47.mdl")
+			}
+			case CSW_M4A1:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_m4a1.mdl")
+			}
+			case CSW_M249:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_m249.mdl")
+			}
+			case CSW_FAMAS:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_famas.mdl")
+			}
+			case CSW_GLOCK18:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_glock18.mdl")
+			}
+			case CSW_USP:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_usp.mdl")
+			}
+			case CSW_DEAGLE:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_deagle.mdl")
+			}
+			case CSW_C4:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_c4.mdl")
+			}
+			case CSW_HEGRENADE:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_hegrenade.mdl")
+				set_pev(id, pev_weaponmodel2, "models/p_hegrenade.mdl")
+			}
+			case CSW_FLASHBANG:
+			{
+				set_pev(id, pev_viewmodel2, "models/v_flashbang.mdl")
+				set_pev(id, pev_weaponmodel2, "models/p_flashbang.mdl")
+			}
+		}
+	}
+}
+
+SaveData(id)
+{
+	new szVaultKey[128], szVaultData[512]
+	
+	formatex(szVaultKey, charsmax(szVaultKey), "FurienEFFx-%s-Save", PrivatePlayerData[id][g_szAuthID])
+	
+	formatex(szVaultData, charsmax(szVaultData), "%i", PrivatePlayerData[id][g_PlayerMoney])
+	nvault_set(g_nVaultSaves, szVaultKey, szVaultData)
+
+	formatex(szVaultData, charsmax(szVaultData), "%i %i %i %i %i %i %i %i %i", 
+	PrivatePlayerData[id][g_PlayerMoney],
+	SpecialItem[id][g_RG], 
+	SpecialItem[id][g_MJ], 
+	SpecialItem[id][g_ND], 
+	SpecialItem[id][g_CO], 
+	SpecialItem[id][g_IR], 
+	SpecialItem[id][g_IB], 
+	SpecialItem[id][g_WE], 
+	SpecialItem[id][g_BH])
+	nvault_set(g_nVaultSaves, szVaultKey, szVaultData)
+}
+
+LoadData(id)
+{
+	new szVaultKey[128], szVaultData[512]
+	
+	formatex(szVaultKey, charsmax(szVaultKey), "FurienEFFx-%s-Save", PrivatePlayerData[id][g_szAuthID])
+	
+	formatex(szVaultData, charsmax(szVaultData), "%i", PrivatePlayerData[id][g_PlayerMoney])
+	nvault_get(g_nVaultSaves, szVaultKey, szVaultData, charsmax(szVaultData))
+			
+	formatex(szVaultData, charsmax(szVaultData), "%i %i %i %i %i %i %i %i %i", 
+	PrivatePlayerData[id][g_PlayerMoney], 
+	SpecialItem[id][g_RG], 
+	SpecialItem[id][g_MJ], 
+	SpecialItem[id][g_ND], 
+	SpecialItem[id][g_CO], 
+	SpecialItem[id][g_IR], 
+	SpecialItem[id][g_IB], 
+	SpecialItem[id][g_WE], 
+	SpecialItem[id][g_BH])
+			
+	nvault_get(g_nVaultSaves, szVaultKey, szVaultData, charsmax(szVaultData))
+			
+	new money[MAX_PLAYERS],rg[MAX_PLAYERS], mj[MAX_PLAYERS], nd[MAX_PLAYERS], co[MAX_PLAYERS], ir[MAX_PLAYERS], ib[MAX_PLAYERS], we[MAX_PLAYERS], bh[MAX_PLAYERS]
+			
+	parse
+	(
+		szVaultData,
+		money, charsmax(money),
+		rg, charsmax(rg), 
+		mj, charsmax(mj), 
+		nd, charsmax(nd), 
+		co, charsmax(co), 
+		ir, charsmax(ir), 
+		ib, charsmax(ib), 
+		we, charsmax(we), 
+		bh, charsmax(bh)
+	)
+
+	PrivatePlayerData[id][g_PlayerMoney] = str_to_num(money)
+		
+	SpecialItem[id][g_RG] = str_to_num(rg)
+	SpecialItem[id][g_MJ] = str_to_num(mj)
+	SpecialItem[id][g_ND] = str_to_num(nd)
+	SpecialItem[id][g_CO] = str_to_num(co)
+	SpecialItem[id][g_IR] = str_to_num(ir)
+	SpecialItem[id][g_IB] = str_to_num(ib)
+	SpecialItem[id][g_WE] = str_to_num(we)
+	SpecialItem[id][g_BH] = str_to_num(bh)
+}
+
+belo_random(num)
+{
+	static LastRandom
+	new rand = random(num)
+	while(LastRandom == rand)
+		rand = random(num)
+
+	LastRandom = rand
+	return rand
+} 
+
+ScreenFade(id, Duration, HoldTime, FadeType, R, G, B, Intensity)
+{ 
+	message_begin(id ? MSG_ONE : MSG_ALL, msg_ScreenFade, .player = id)
+	write_short(Duration)
+	write_short(HoldTime)
+	write_short(FadeType)
+	write_byte(R)
+	write_byte(G) 
+	write_byte(B) 
+	write_byte(Intensity) 
+	message_end()
+}
+
+set_rendering2(index, fx=kRenderFxNone, r=255, g=255, b=255, render=kRenderNormal, amount=16)
+{
+	return set_rendering(index,fx,r,g,b,render,amount)
+}
+
+fm_get_user_model(player, model[], len)
+{
+	engfunc(EngFunc_InfoKeyValue, engfunc(EngFunc_GetInfoKeyBuffer, player), "model", model, len)
+}
+
+Float:fm_get_user_speed(id)
+{
+	new Float:MaxSpeed
+	pev(id, pev_maxspeed, MaxSpeed)
+	return MaxSpeed
+}
+
+fm_set_user_grav(id, Float:grav = 1.0)
+{
+	set_pev(id, pev_gravity, grav)
+	return 1
+}
+
+fm_set_user_speed(id, Float:MSpeed = -1.0) 
+{
+	engfunc(EngFunc_SetClientMaxspeed, id, MSpeed)
+	set_pev(id, pev_maxspeed, MSpeed)
+	return 1
+}
+
+fm_cs_get_current_weapon_ent(id)
+{
+	if(pev_valid(id) != PDATA_SAFE)
+		return -1
+	
+	return get_pdata_cbase(id, m_pActiveItem, XTRA_OFS_PLAYER)
+}
+
+fm_cs_get_weapon_ent_owner(ent)
+{
+	if(pev_valid(ent) != PDATA_SAFE)
+		return -1
+	
+	return get_pdata_cbase(ent, m_pPlayer, OFFSET_LINUX_WEAPONS)
+}
+
+noMoneyfunc(index)
+{
+	switch(get_user_flags(index))
+	{
+		case ADMIN_SVIP:	color_chat(index, "%L", index, "PLAYER_NO_MONEY_EVIP")
+		case ADMIN_VIP:		color_chat(index, "%L", index, "PLAYER_NO_MONEY_VIP")
+		default:		color_chat(index, "%L", index, "PLAYER_NO_MONEY")
+	}
+}
+
+CantRightNow(index)
+{
+	color_chat(index, "%L", index, "CHAT_YOU_CANNOT_SAY_MESSAGE")
+}
+
+noAccessfunc(index, iAccess)
+{
+	switch(iAccess)
+	{
+		case ADMIN_SVIP:
+		{
+			color_chat(index, "%L", index, "PLAYER_NO_ACCESS_EVIP")
+			client_print(index, print_center,"%L", index, "PLAYER_NO_ACCESS_EVIP")
+		}
+		case ADMIN_VIP:
+		{
+			color_chat(index, "%L", index, "PLAYER_NO_ACCESS_VIP")
+			client_print(index, print_center,"%L", index, "PLAYER_NO_ACCESS_VIP")
+		}
+	}
+}
+
+youAlreadyHave(index, itemName[18])
+{
+	new bool:isKnife = bool:(!(containi(itemName, "super") != -1) && (containi(itemName, "knife") != -1))
+
+	new szPreposition[5]
+
+	if(isKnife)
+	{
+		replace(itemName, charsmax(itemName), "knife", "")
+		formatex(szPreposition, charsmax(szPreposition), "%L", index, "CHAT_PREPOSITION_A")
+	}
+	else
+	{
+		formatex(szPreposition, charsmax(szPreposition), "%L", index, "CHAT_PREPOSITION_B")
+	}
+
+	color_chat(index, "%L", index, "CHAT_YOU_ALREADY_HAVE", szPreposition, isKnife ? "knife" : "item", itemName)
+}
+
+get_user_id()
+{
+	new LogUser[80], szName[MAX_PLAYERS]
+	read_logargv(0, LogUser, charsmax(LogUser))
+	parse_loguser(LogUser, szName, charsmax(szName))
+
+	return get_user_index(szName)
+}
+
+giveUserTmp(id)
+{
+	switch(get_user_flags(id))
+	{
+		case ADMIN_SVIP:
+		{
+			give_user_weapon(id, CSW_TMP, 10, 0)
+		}
+		case ADMIN_VIP:
+		{
+			give_user_weapon(id, CSW_TMP, 7, 0)
+		}
+		default:
+		{
+			give_user_weapon(id, CSW_TMP, 5, 0)
+		}
+	}
+}
+
+stock color_chat(const id, const szMessage[], any:...) 
+{
+	new iCount = 1, iPlayers[MAX_PLAYERS], Player
+
+	static szMsg[191]
+	vformat(szMsg, charsmax(szMsg), szMessage, 3)
+
+	replace_all(szMsg, charsmax(szMsg), "!g", "^4")
+	replace_all(szMsg, charsmax(szMsg), "!y", "^1")
+	replace_all(szMsg, charsmax(szMsg), "!t", "^3")
+	
+	if(id) iPlayers[0] = id; else get_players(iPlayers, iCount, "ch")
+	{
+		for(new i = 0; i < iCount; i++)
+		{
+			Player = iPlayers[i]
+
+			message_begin(MSG_ONE_UNRELIABLE, msg_SayText, .player = Player )  
+			write_byte(Player)
+			write_string(szMsg)
+			message_end()
+		}
+	}
+}
+
+// Craxor's stock - https://forums.alliedmods.net/showthread.php?t=278123
+give_user_weapon( index , iWeaponTypeID , iClip=0 , iBPAmmo=0 , szWeapon[]="" , maxchars=0 )
+{
+	if ( !( CSW_P228 <= iWeaponTypeID <= CSW_P90 ) || ( iClip < 0 ) || ( iBPAmmo < 0 ) || !is_user_alive( index ) )
+		return -1;
+	
+	new szWeaponName[ 20 ] , iWeaponEntity , bool:bIsGrenade;
+	
+	const GrenadeBits = ( ( 1 << CSW_HEGRENADE ) | ( 1 << CSW_FLASHBANG ) | ( 1 << CSW_SMOKEGRENADE ) | ( 1 << CSW_C4 ) );
+	
+	if ( ( bIsGrenade = bool:!!( GrenadeBits & ( 1 << iWeaponTypeID ) ) ) )
+		iClip = clamp( iClip ? iClip : iBPAmmo , 1 );
+	
+	get_weaponname( iWeaponTypeID , szWeaponName , charsmax( szWeaponName ) );
+	
+	if ( ( iWeaponEntity = user_has_weapon( index , iWeaponTypeID ) ? find_ent_by_owner( -1 , szWeaponName , index ) : give_item( index , szWeaponName ) ) > 0 )
+	{
+		if ( iWeaponTypeID != CSW_KNIFE )
+		{
+			if ( iClip && !bIsGrenade )
+				cs_set_weapon_ammo( iWeaponEntity , iClip );
+		
+			if ( iWeaponTypeID == CSW_C4 ) 
+				cs_set_user_plant( index , 1 , 1 );
+			else
+				cs_set_user_bpammo( index , iWeaponTypeID , bIsGrenade ? iClip : iBPAmmo ); 
+		}
+		
+		if ( maxchars )
+			copy( szWeapon , maxchars , szWeaponName[7] );
+	}
+	
+	return iWeaponEntity;
+}

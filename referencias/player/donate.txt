@@ -1,0 +1,471 @@
+//TODO: if player receives multiple donations reallly fast,
+// he may be able to go above 16k if the value was already cached
+// and he received a big donation.
+
+#include <amxmodx>
+#include <fakemeta>
+
+#pragma semicolon 1
+#define OFFSET_MONEY		115
+#define cs_get_user_money(%1)	get_pdata_int((%1),OFFSET_MONEY)
+#define SameTeam(%1,%2) (get_user_team(%1) == get_user_team(%2))
+#define MP_FREEZETIME get_pcvar_num(get_cvar_pointer("mp_freezetime"))
+#define PLAYER_NOT_SPEC(%1) ((1 << get_user_team(%1)) & 0b0110)
+#define TEAM_NOT_SPEC(%1) ((1 << (%1)) & 0b0110)
+#define LOG
+
+new const gMsgPrefix[] = "[DONATE]";
+new const gMenuTitlePrefix[] = "[MENU \rRESENHA\y by Interno]^n";
+new const gLogFile[] = "donationsLog.txt";
+new gHudMsgSync, gHudMsgSyncSayDonate;
+new gMoneyMsgId;
+new gCurrentDntReceiverId[MAX_PLAYERS +1];
+new gMenuHandler[MAX_PLAYERS +1] = {-1, ...};
+new gCurrentRound = 0;
+new pCvStartDonateAtRound = 4;
+new gAmountDonatedByPlayer[MAX_PLAYERS + 1];
+new pCvDonateLimit;
+new forwardId, aimingAtPlayerEventHandle, stoppedAimingAtPlayerEventHandle;
+new gTeammatesListMenuHandler[MAX_PLAYERS +1] = {-1, ...};
+
+public plugin_init() {
+	register_plugin("EasyDonate", "1.0", "DevOak");
+	
+	register_dictionary("donate.txt");
+	
+
+	// Argument 1 may be 1 (team relation), 2 (target id) or 3 (target health).
+	// Argument 2 is just the value for the specified flag.
+	aimingAtPlayerEventHandle =
+	register_event_ex("StatusValue",
+	"EvStatusValueShowPlayerInfo",
+	RegisterEvent_Single | RegisterEvent_OnlyAlive | RegisterEvent_OnlyHuman, // "bef"
+	"1=2", // Target id (flag=2) is > 0 (2>0), i.e., looking at a player.
+	"2>0");
+
+	stoppedAimingAtPlayerEventHandle =
+	register_event_ex("StatusValue",
+	"EvStatusValueHide",
+	RegisterEvent_Single | RegisterEvent_OnlyHuman, // "bf"
+	"1=1", // Team relation (flag=1) is 0 (2=0), i.e., not looking at anything.
+	"2=0");
+
+    // https://wiki.alliedmods.net/Half-Life_1_Game_Events#HLTV
+	// NOT CALLED ON FIRST ROUND AFTER CHANGING MAP!
+	// WHY? WHO KNOWS...
+	// For now, no one starts a pug right off the bat without
+	// a restart, so we are safe.
+	// Same reason all relevant hooks are disabled at the
+	// end of plugin_init.
+	register_event("HLTV", "EventNewRound", "a", "1=0", "2=0");
+
+	// https://wiki.alliedmods.net/Half-Life_1_Game_Events#TextMsg
+	register_event("TextMsg", "EventGameRestart", "a", "2=#Game_Commencing", "2=#Game_will_restart_in");
+	
+	// World triggered "Round_Start".
+	// 2 arguments:
+	// 0 = "World triggered"
+	// 1 = "Round_Start"
+	// The log strings are formatted according to this function:
+	// https://github.com/alliedmodders/amxmodx/blob/27f451a868c3154a0ab0d4d70e0a650074fd485d/amxmodx/CLogEvent.cpp#L132
+	register_logevent("EventRoundStart", 2, "1=Round_Start");
+
+	register_clcmd("say /d", "OnSayDonate");
+
+	pCvStartDonateAtRound = register_cvar("donate_start", "4");
+	pCvDonateLimit = register_cvar("donate_max", "2500");
+
+	gHudMsgSync = CreateHudSyncObj();
+	gHudMsgSyncSayDonate = CreateHudSyncObj();
+	gMoneyMsgId = get_user_msgid("Money");
+
+	// These are controlled by EventNewRound and EventRoundStart.
+	// No need to keep 'em activated right now.
+	disable_event(aimingAtPlayerEventHandle);
+	disable_event(stoppedAimingAtPlayerEventHandle);
+}
+
+public plugin_cfg()
+	server_cmd("exec addons/amxmodx/configs/donate.cfg");
+
+public EvStatusValueShowPlayerInfo(id) {
+
+	/*
+	https://www.amxmodx.org/api/amxmodx/register_event
+	Due to a long-standing bug that would break compatibility with older
+	plugins, the client id should be checked for alive/dead state if using
+	flags "d" or "e".
+
+	Hence, "is_user_alive(id)".
+	*/
+	if (is_user_alive(id)) {
+		
+		// Time is 60 because it should be greater than any common sense
+		// freeze time, and this message is erased upon moving the aim
+		// or round start. So, as long as the user keeps aiming at
+		// another player, the message should stay on, and if we set a value
+		// here smaller than the freeze time, the message will disappear
+		// before it should.
+		set_hudmessage(255, 170, 0, -1.0, -1.0, 0, 0.0, 60.0, 0.0, 0.0, -1);
+		
+		if (gCurrentRound >= get_pcvar_num(pCvStartDonateAtRound)) {    
+			ShowSyncHudMsg(id, gHudMsgSync, "%L", id, "DONATE_KEY_INFO");
+		}
+		else {
+			ShowSyncHudMsg(id, gHudMsgSync, "%L", id, "DONATE_MIN_ROUND", get_pcvar_num(pCvStartDonateAtRound));
+		}
+	}
+}
+
+public EvStatusValueHide(id) {
+	ClearSyncHud(id, gHudMsgSync);
+}
+
+public OnUseKeyPress(id , handle) {
+	
+	static button, oldbuttons, target, bodyPart;
+	
+	//button = pev(id, pev_button); // buttons in current frame
+	button = get_uc(handle, UC_Buttons);
+	oldbuttons = pev(id, pev_oldbuttons); // buttons in previous frame
+	
+	//if(button & IN_USE && !(oldbuttons & IN_USE)) {
+	//    first frame the player press the +use key
+	//}
+	
+	//if(button & IN_USE && oldbuttons & IN_USE) {
+	//    player is holding the +use key
+	//}
+	
+	// Release +use key.
+	if(!(button & IN_USE) && (oldbuttons & IN_USE)) {
+
+		// is_user_connected -> to check whether target id is a player.
+		if (get_user_aiming(id, target, bodyPart) != 0 && target >= 1 && target <= 32) {
+	
+			if (gCurrentRound >= get_pcvar_num(pCvStartDonateAtRound)) {
+				if (gAmountDonatedByPlayer[id] == get_pcvar_num(pCvDonateLimit)) {
+					client_print_color_pfx(id, "%L", id, "DONATION_LIMIT_HIT", get_pcvar_num(pCvDonateLimit));
+				}				
+				else {
+					showDonateMenu(id, target);
+				}
+			}
+			else {
+				client_print_color_pfx(id, "%L", id, "DONATE_MIN_ROUND", get_pcvar_num(pCvStartDonateAtRound));
+			}
+		}
+	}
+	
+	return FMRES_IGNORED;
+}
+
+showDonateMenu(id, target) {
+	
+	new donorMoney = cs_get_user_money(id);
+	new menuHandler = gMenuHandler[id];
+
+	if (donorMoney < 100) {
+		client_print_color_pfx(id, "%L", id, "NOT_ENOUGH_MONEY");
+		return;
+	}
+	
+	if (menuHandler >= 0) {
+		menu_destroy(menuHandler);
+		#if defined LOG
+		log_to_file(gLogFile, "ShowDonateMenu: menu would leak!");
+		#endif
+	}
+	
+	menuHandler = gMenuHandler[id] = menu_create(fmt("%s%s", gMenuTitlePrefix, fmt("%L", id, "MENU_TITLE", target)), "DonateMenu");
+	
+	menu_additem(menuHandler, "100");
+	
+	new menuCount = donorMoney / 500;
+	new menuItemText[5];
+	for (new i = 1; i <= menuCount && i < 6; i++) {
+		num_to_str(500 * i, menuItemText, 4);
+		menu_additem(menuHandler, menuItemText);
+	}
+	
+	menu_setprop(menuHandler, MPROP_EXIT, MEXIT_ALL);
+	menu_setprop(menuHandler, MPROP_EXITNAME, fmt("%L", id, "MENU_EXIT"));
+	gCurrentDntReceiverId[id] = target;
+	menu_display(id, menuHandler, 0);	
+}
+
+public DonateMenu(id, menu, item) {
+	
+	if(item == MENU_EXIT) {
+		menu_destroy(menu);
+		gMenuHandler[id] = -1;
+		return PLUGIN_HANDLED;
+	}
+	
+	//static access, info[1], callback;
+	//menu_item_getinfo(menu, item, access, info, 0, _, _, callback);
+	new target = gCurrentDntReceiverId[id];
+	new valToDonate = item > 0 ? 500 * item : 100;
+	new donorMoney = cs_get_user_money(id);
+	
+	if (valToDonate > donorMoney) {
+		client_print_color_pfx(id, "%L", id, "NOT_ENOUGH_MONEY");
+	}
+	else {
+		
+		new recvrMoney = cs_get_user_money(target);
+		
+		// Check if can donate that amount,
+		// and trunc to possible amount.
+		if (recvrMoney + valToDonate > 16000) {
+			valToDonate = 16000 - recvrMoney;
+		} 
+		
+		// Then recheck if the player can donate the amount because
+		// not sure if we could suffer a race condition here whereby
+		// the code could get here even though this was checked beore.
+		if (gAmountDonatedByPlayer[id] + valToDonate > get_pcvar_num(pCvDonateLimit)) {
+			valToDonate = get_pcvar_num(pCvDonateLimit) - gAmountDonatedByPlayer[id];
+			if (valToDonate > 0) {
+				client_print_color_pfx(id, "%L", id, "DONATE_CAPPED_LIMIT", valToDonate, get_pcvar_num(pCvDonateLimit));
+			}
+		}
+		
+		if (valToDonate > 0) {
+			#if defined LOG
+			// Log these to see if it ever happens that the cached money value is different
+			// than the actual amount when concluding the donation.
+			if (donorMoney != cs_get_user_money(id)) {
+				log_to_file(gLogFile, "DonateMenu: cs_set_user_money(id, donorMoney (then %d, now %d - %s) - valToDonate (%d)) = %d", donorMoney, cs_get_user_money(id), donorMoney == cs_get_user_money(id) ? "SAME" : "DIFF", valToDonate, donorMoney - valToDonate);
+				goto cleanupAndReturn;
+			}
+
+			if (recvrMoney != cs_get_user_money(target)) {
+				log_to_file(gLogFile, "DonateMenu: cs_set_user_money(target, recvrMoney (then %d, now %d - %s) + valToDonate (%d)) = %d", recvrMoney, cs_get_user_money(target), recvrMoney == cs_get_user_money(target) ? "SAME" : "DIFF", valToDonate, recvrMoney + valToDonate);
+				goto cleanupAndReturn;
+			}
+
+			if (get_user_team(id) != get_user_team(target)) {
+				log_to_file(gLogFile, "DonateMenu: current teams: donor %d, receiver %d (%s)", get_user_team(id), get_user_team(target), get_user_team(id) == get_user_team(target) ? "SAME" : "DIFF");
+				goto cleanupAndReturn;
+			}
+
+			if (gAmountDonatedByPlayer[id] > get_pcvar_num(pCvDonateLimit)) {
+				log_to_file(gLogFile, "DonateMenu: player surpassed donation limit! %d", gAmountDonatedByPlayer[id]);
+				goto cleanupAndReturn;
+			}
+
+			#endif
+			cs_set_user_money(id, donorMoney - valToDonate);
+			cs_set_user_money(target, recvrMoney + valToDonate);
+			gAmountDonatedByPlayer[id] += valToDonate;
+
+			#if defined LOG
+			if (cs_get_user_money(target) > 16000)
+				log_to_file(gLogFile, "RECEIVER SURPASSED 16k! (%d)", cs_get_user_money(target));
+			#endif
+
+			new teammates[MAX_PLAYERS], numTeammates;
+			get_players(teammates, numTeammates, "e", (get_user_team(id) == _:CS_TEAM_T) ? "TERRORIST" : "CT");
+			for(new i = 0; i < numTeammates; i++)
+			{
+				client_print_color(teammates[i], id, "%s %s", gMsgPrefix, fmt("%L", teammates[i], "DONATED_MSG", id, valToDonate, target));
+			}
+		}
+		else {
+			client_print_color_pfx(id, "%L", id, "PLAYER_16K", target);
+		}
+	}
+	
+	cleanupAndReturn:
+	menu_destroy(menu);
+	gMenuHandler[id] = -1;
+	return PLUGIN_HANDLED;
+}
+
+public EventNewRound() {
+
+	enable_hooks();
+
+	// Reset players donations from previous rounds.
+	for(new i = 1; i < 33; i++)
+		gAmountDonatedByPlayer[i] = 0;
+
+	// Increment round count so that
+	// we know when to enable donations.
+	gCurrentRound++;
+
+	// Display an instructional message to players
+	// explaining the donate say command.
+	if (gCurrentRound >= get_pcvar_num(pCvStartDonateAtRound)
+	&& get_playersnum() > 1) {
+
+		new tsToShowMsgTo;
+		new ctsToShowMsgTo;
+		new teamCount[3]; // 1 = T count; 2 = CT count.
+		new team;
+		for(new i = 1; i <= MAX_PLAYERS; i++)
+		{
+			team = get_user_team(i);
+			if (team != -1 && (TEAM_NOT_SPEC(team))) {
+				teamCount[team]++;
+				
+				if (team == _:CS_TEAM_T)
+					tsToShowMsgTo |= ( 1 << ( i & 31 ) );
+				else
+					ctsToShowMsgTo |= ( 1 << ( i & 31 ) );
+			}
+		}
+
+		new Float:ft = float(MP_FREEZETIME);
+		set_hudmessage(255, 170, 0, -1.0, 0.6, 1, ft, ft, 0.0, 0.0);
+
+		if (teamCount[_:CS_TEAM_T] > 1) {
+			for(new i = 1; i <= MAX_PLAYERS; i++)
+			{
+				if (tsToShowMsgTo & ( 1 << ( i & 31 ))) {
+					ShowSyncHudMsg(i, gHudMsgSyncSayDonate, "%L", i, "DONATE_SAY_INFO");
+					client_print_color_pfx(i, "%L", i, "DONATE_SAY_INFO");
+					client_print(i, print_center, "^r^r%L", i, "DONATE_SAY_INFO");
+					client_print_color_pfx(i, "%L", i, "DONATE_SAY_INFO");
+					client_print(i, print_center, "^r^r%L", i, "DONATE_SAY_INFO");
+				}
+			}
+		}
+		
+		if (teamCount[_:CS_TEAM_CT] > 1) {
+			for(new i = 1; i <= MAX_PLAYERS; i++)
+			{
+				if (ctsToShowMsgTo & ( 1 << ( i & 31 ))) {
+					ShowSyncHudMsg(i, gHudMsgSyncSayDonate, "%L", i, "DONATE_SAY_INFO");
+					client_print_color_pfx(i, "%L", i, "DONATE_SAY_INFO");
+					client_print(i, print_center, "^r^r%L", i, "DONATE_SAY_INFO");
+					client_print_color_pfx(i, "%L", i, "DONATE_SAY_INFO");
+					client_print(i, print_center, "^r^r%L", i, "DONATE_SAY_INFO");
+				}
+			}
+		}
+	}
+}
+
+public EventRoundStart() {
+	disable_hooks();
+	ClearSyncHud(0, gHudMsgSync);
+	ClearSyncHud(0, gHudMsgSyncSayDonate);
+} 
+
+public EventGameRestart() {
+	gCurrentRound = 0;
+}
+
+public OnSayDonate(id) {
+
+	new startDonateAtRound = get_pcvar_num(pCvStartDonateAtRound);
+	if (gCurrentRound < startDonateAtRound) {
+		client_print_color_pfx(id, "%L", id, "DONATE_MIN_ROUND", startDonateAtRound);
+		return;
+	}
+
+	if (!is_user_alive(id))
+		return;
+
+	new teammates[MAX_PLAYERS], numTeammates;
+	get_players(teammates, numTeammates, "e", (get_user_team(id) == _:CS_TEAM_T) ? "TERRORIST" : "CT");
+	
+	if (numTeammates == 0)
+		return;
+	
+	new menuHandler = gTeammatesListMenuHandler[id];
+	
+	if (menuHandler >= 0) {
+		menu_destroy(menuHandler);
+		// No need to gTeammatesListMenuHandler[id] = -1 here
+		// since we are about to create a new one
+		// and this check isn't performed elsewhere.
+		// only needed to be resert when destroyed from
+		// other places.
+		#if defined LOG
+		log_to_file(gLogFile, "OnSayDonate: menu would leak!");
+		#endif
+	}
+	
+	menuHandler = gTeammatesListMenuHandler[id] = menu_create(fmt("%s%s", gMenuTitlePrefix, fmt("%L", id, "TEAMMATES_MENU_TITLE")), "TeammatesMenuHandler");
+	
+	for(new i = 0; i < numTeammates; i++) {
+		new teammateId = teammates[i];
+		if (teammateId != id)
+			menu_additem(menuHandler, fmt("%n", teammateId), fmt("%d", teammateId));
+	}
+	
+	menu_setprop(menuHandler, MPROP_EXIT, MEXIT_ALL);
+	menu_setprop(menuHandler, MPROP_EXITNAME, fmt("%L", id, "MENU_EXIT"));
+	
+	menu_display(id, menuHandler, 0);
+}
+
+public TeammatesMenuHandler(id, menu, item) {
+  
+	if(item == MENU_EXIT) {
+		menu_destroy(menu);
+		gTeammatesListMenuHandler[id] = -1;
+		return PLUGIN_HANDLED;
+	}
+	
+	// TODO -> display menu to donate to player X.
+	// Remember to add playerid in menu item info first.
+	// Also check to simplify menu destroy on the other menu.
+	new access, info[3], callback;
+	menu_item_getinfo(menu, item, access, info, 2, _, _, callback);
+    
+	new teammateId = str_to_num(info);
+
+	// Bring up the values options menu.
+	showDonateMenu(id, teammateId);
+
+	// Clear menu.
+	menu_destroy(menu);
+	gTeammatesListMenuHandler[id] = -1;
+
+	return PLUGIN_HANDLED;
+}
+
+cs_set_user_money(id, iMoney, iFlash = 1) {
+	set_pdata_int(id, OFFSET_MONEY, iMoney);
+	engfunc(EngFunc_MessageBegin, MSG_ONE_UNRELIABLE, gMoneyMsgId, {0, 0, 0}, id);
+	write_long(iMoney);
+	write_byte(iFlash ? 1 : 0);	// Flash (difference between new and old money)
+	message_end();
+}
+
+client_print_color_pfx(id, msg[], any:...) {
+	
+	new formattedMsg[MAX_FMT_LENGTH];
+	vformat(formattedMsg, charsmax(formattedMsg), msg, 3);
+	client_print_color(id, id, "^4%s^1 ^3%s", gMsgPrefix, formattedMsg);
+}
+
+enable_hooks() {
+	forwardId = register_forward(FM_CmdStart, "OnUseKeyPress");
+	enable_event(aimingAtPlayerEventHandle);
+	enable_event(stoppedAimingAtPlayerEventHandle);
+}
+
+disable_hooks() {
+	unregister_forward(FM_CmdStart, forwardId);
+	disable_event(aimingAtPlayerEventHandle);
+	disable_event(stoppedAimingAtPlayerEventHandle);
+}
+
+/*
+test_dict() {
+	new id = 1;
+	client_print_color(id,id, "%L", id, "DONATE_KEY_INFO");
+	client_print_color(id,id, "%L", id, "DONATE_MIN_ROUND", 4);
+	client_print_color(id,id, "%L", id, "DONATION_LIMIT_HIT", 2500);
+	client_print_color(id,id, "%L", id, "NOT_ENOUGH_MONEY");
+	client_print_color(id,id, "%L", id, "MENU_TITLE", id);
+	client_print_color(id,id, "%L", id, "MENU_EXIT");
+	client_print_color(id,id, "%L", id, "DONATE_CAPPED_LIMIT", 100, 2500);
+	client_print_color(id,id, "%L", id, "DONATED_MSG", id, 100, id);
+	client_print_color(id,id, "%L", id, "PLAYER_16K", id);
+}*/

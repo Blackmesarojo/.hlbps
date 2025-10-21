@@ -1,0 +1,158 @@
+/*
+	FFCustomDamage - https://forums.alliedmods.net/showthread.php?t=220703
+	
+	Plugin by Mauricio Frb - https://forums.alliedmods.net/showthread.php?t=220703
+
+	Description: This plugin block Friendlyfire when round ends and game commencing or on a player that is planting/defusing bomb.
+	
+	Credits:
+	Original plugin and idea by .MMYTH.: https://forums.alliedmods.net/showthread.php?t=147291
+	Bomb Script tutorial by VEN: https://forums.alliedmods.net/showthread.php?t=40164
+	New Round / End Round Script tutorial by VEN: https://forums.alliedmods.net/showthread.php?t=42159
+	Scripting Help topic - Thanks who help: https://forums.alliedmods.net/showthread.php?t=221383
+	
+	Games supported:
+	- Counter-Strike;
+	- Condition Zero.
+
+	Modules required:
+	- Hamsandwich;
+	- Cstrike.
+
+	Cvar:
+	amx_ffcdamage <(Default:3)>
+	// 0 - Disable plugin;
+	// 1 - Only works on end round and when game commencing;
+	// 2 - Only works on a player that is planting/defusing bomb;
+	// 3 - 1 & 2 options together.
+	
+	Changelog:
+	1.3 - Fix some code.
+	1.2 - Reformulated code.
+	1.1 - Bad code reported.
+	1.0 - First release.
+*/
+
+#include <amxmodx>
+#include <cstrike>
+#include <hamsandwich>
+
+#define VERSION "1.3"
+
+#define ENDROUND	(1<<0)
+#define PLANTDEFUSING	(1<<1)
+
+#pragma semicolon 1
+
+new cvar_mode, friendlyfire, customdamage_on = 0;
+new playerid, is_user_plantingdefusing = 0;
+new HamHook:HamForward;
+
+public plugin_init()
+{
+	register_plugin("FF Custom Damage", VERSION, "Mauricio Frb");
+	
+	friendlyfire = get_cvar_pointer("mp_friendlyfire");
+	
+	if(!get_pcvar_num(friendlyfire) || !IsHamValid(Ham_TakeDamage))
+	{
+		server_print("[AMXX] Plugin: 'FFCustomDamage.amxx' will pause because is incompatible with the server.");
+		pause("a", "FFCustomDamage.amxx");
+	}
+	
+	cvar_mode = register_cvar("amx_ffcdamage", "3");
+	
+	HamForward = RegisterHam(Ham_TakeDamage, "player", "ham_playertakedamage", 0);
+	DisableHamForward(HamForward);
+	
+	// New round event
+	register_event("TextMsg", "event_newround", "a", "2&#Game_C","2&#Game_w");
+	register_event("HLTV", "event_newround", "a", "1=0", "2=0");
+	// End round event
+	register_logevent("logevent_endround", 2, "1=Round_End");
+	// Bomb planting started event
+	register_event("BarTime", "event_planting_defusing", "be", "1=3");
+	// Bomb defusion started event
+	register_event("BarTime", "event_planting_defusing", "be", "1=5", "1=10");
+	// Bomb planted event
+	register_logevent("logevent_planted_defused", 3, "2=Planted_The_Bomb");
+	// Bomb defused event
+	register_logevent("logevent_planted_defused", 3, "2=Defused_The_Bomb");
+	// Bomb planting/defusion canceled event
+	register_event("BarTime", "logevent_planted_defused", "b", "1=0");
+	register_event("CurWeapon", "logevent_planted_defused", "be", "2!6");
+	// Target saved event
+	register_logevent("logevent_planted_defused", 6, "3=Target_Saved");
+	// Bomb explode event
+	register_logevent("logevent_planted_defused", 6, "3=Target_Bombed");
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+// New/End Round
+public event_newround()
+{
+	if(customdamage_on)
+	{
+		DisableHamForward(HamForward);
+		
+		customdamage_on = 0;
+	}
+}
+
+public logevent_endround()
+{
+	if(get_pcvar_num(cvar_mode) & ENDROUND)
+	{
+		EnableHamForward(HamForward);
+		
+		customdamage_on = 1;
+	}
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Planting/Defusing
+public event_planting_defusing(id)
+{
+	if(get_pcvar_num(cvar_mode) & PLANTDEFUSING && !customdamage_on)
+	{
+		playerid = get_user_userid(id);
+		
+		is_user_plantingdefusing = 1;
+		
+		customdamage_on = 1;
+		
+		EnableHamForward(HamForward);
+	}
+}
+public logevent_planted_defused()
+{
+	if(is_user_plantingdefusing)
+	{
+		DisableHamForward(HamForward);
+		
+		is_user_plantingdefusing = 0;
+		customdamage_on = 0;
+	}
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Block damage function
+public ham_playertakedamage(idvictim, idinflictor, idattacker, Float:damage, damagebits)
+{
+	if(!is_user_connected(idattacker) || !get_pcvar_num(cvar_mode) || !get_pcvar_num(friendlyfire)) 
+		return HAM_HANDLED;
+	
+	new id; is_user_plantingdefusing ? (id = playerid) : (id = idvictim);
+	
+	if(id != idattacker && cs_get_user_team(id) == cs_get_user_team(idattacker))
+	{
+		SetHamReturnInteger(0);
+		
+		return HAM_SUPERCEDE;
+	}
+
+	return HAM_IGNORED;
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////

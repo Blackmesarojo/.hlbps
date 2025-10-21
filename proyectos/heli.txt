@@ -1,0 +1,527 @@
+#include <amxmodx>
+#include <engine>
+#include <fakemeta>
+#include <amxmisc>
+#include <hamsandwich>
+
+// --- DEFINICIONES ---
+#define NPC_CLASSNAME "npc_helicoptero"
+#define NPC_MODEL "models/helicoptero/SMP3.mdl"
+#define BULLET_CLASSNAME "npc_bullet"
+#define BULLET_MODEL "models/helicoptero/bullet.mdl"
+
+// --- IA Y ESTADÍSTICAS ---
+#define OWNER_NAME "Blackmesarojo"
+#define HELICOPTER_SPEED 300.0
+#define FOLLOW_DISTANCE 150.0 
+#define ATTACK_DISTANCE 1500.0
+#define FIRE_RATE 0.2
+#define BULLET_DAMAGE 8.0
+#define BULLET_SPEED 800.0
+#define LEASH_DISTANCE 500.0
+#define MAX_HELICOPTERS 2
+#define IDLE_ANIMATION 0
+
+// --- Posiciones de Formación ---
+#define HOVER_HEIGHT 70.0
+#define HOVER_SIDE_OFFSET 60.0
+
+// --- SONIDOS ---
+#define ROTOR_SOUND "apache/ap_rotor4.wav"
+new const FIRE_SOUNDS[][] = {
+	"weapons/saw_fire1.wav",
+	"weapons/saw_fire2.wav",
+	"weapons/saw_fire3.wav"
+};
+
+// --- VARIABLES GLOBALES ---
+new g_iHelicopters[MAX_HELICOPTERS];
+new g_iTarget;
+new g_iEnemyTarget;
+new bool:g_bOwnerHasDied;
+new Float:g_flNextAttackTime;
+new g_iHelicopterCount = 0;
+new bool:g_bMustFollow[MAX_HELICOPTERS];
+
+public plugin_init()
+{
+	register_plugin("NPC Helicoptero de Equipo", "11.1 Definitivo", "Gemini");
+	register_clcmd("amx_heliadd", "CmdSpawnHelicoptero", ADMIN_RCON, "Crea un helicoptero NPC de apoyo.");
+	register_clcmd("amx_helidel", "CmdRemoveHelicopters", ADMIN_RCON, "Elimina todos los helicopteros activos.");
+	register_think(NPC_CLASSNAME, "NpcThink");
+	register_touch(BULLET_CLASSNAME, "*", "fw_BulletTouch");
+}
+
+public plugin_precache()
+{
+	precache_model(NPC_MODEL);
+	precache_model(BULLET_MODEL);
+	
+	precache_sound(ROTOR_SOUND);
+	for (new i = 0; i < sizeof(FIRE_SOUNDS); i++)
+	{
+		precache_sound(FIRE_SOUNDS[i]);
+	}
+}
+
+public CmdRemoveHelicopters(id, level, cid)
+{
+	if (!cmd_access(id, level, cid, 1)) {
+		return PLUGIN_HANDLED;
+	}
+
+	new count = 0;
+	for (new i = 0; i < MAX_HELICOPTERS; i++)
+	{
+		if (is_valid_ent(g_iHelicopters[i]))
+		{
+			emit_sound(g_iHelicopters[i], CHAN_STATIC, "common/null.wav", 0.0, 0.0, SND_STOP, 0);
+			remove_entity(g_iHelicopters[i]);
+			count++;
+		}
+		g_iHelicopters[i] = 0;
+	}
+	
+	g_iHelicopterCount = 0;
+	client_print(id, print_chat, "[NPC] Se han eliminado %d helicópteros.", count);
+	return PLUGIN_HANDLED;
+}
+
+public task_remove_entity(iEnt)
+{
+	if (is_valid_ent(iEnt))
+	{
+		remove_entity(iEnt);
+	}
+}
+
+public CmdSpawnHelicoptero(id, level, cid)
+{
+	if (!cmd_access(id, level, cid, 1)) {
+		return PLUGIN_HANDLED;
+	}
+
+	if (g_iHelicopterCount >= MAX_HELICOPTERS)
+	{
+		client_print(id, print_chat, "[NPC] Límite de %d helicópteros alcanzado. Usa amx_helidel para eliminarlos.", MAX_HELICOPTERS);
+		return PLUGIN_HANDLED;
+	}
+
+	new slot = -1;
+	for (new i = 0; i < MAX_HELICOPTERS; i++)
+	{
+		if (!is_valid_ent(g_iHelicopters[i]))
+		{
+			slot = i;
+			break;
+		}
+	}
+
+	if (slot == -1)
+	{
+		client_print(id, print_chat, "[NPC] No se encontró una ranura libre.");
+		return PLUGIN_HANDLED;
+	}
+
+	new iHeli = create_entity("info_target");
+	
+	new Float:vPlayerOrigin[3], Float:vPlayerAngles[3], Float:vRight[3];
+	pev(id, pev_origin, vPlayerOrigin);
+	pev(id, pev_angles, vPlayerAngles);
+	
+	engfunc(EngFunc_MakeVectors, vPlayerAngles);
+	global_get(glb_v_right, vRight);
+
+	new Float:offset_multiplier = (slot == 0) ? -1.0 : 1.0;
+	new Float:vSpawnOrigin[3];
+	vSpawnOrigin[0] = vPlayerOrigin[0] + (vRight[0] * HOVER_SIDE_OFFSET * offset_multiplier);
+	vSpawnOrigin[1] = vPlayerOrigin[1] + (vRight[1] * HOVER_SIDE_OFFSET * offset_multiplier);
+	vSpawnOrigin[2] = vPlayerOrigin[2] + HOVER_HEIGHT;
+	entity_set_origin(iHeli, vSpawnOrigin);
+	
+	entity_set_string(iHeli, EV_SZ_classname, NPC_CLASSNAME);
+	entity_set_model(iHeli, NPC_MODEL);
+	entity_set_float(iHeli, EV_FL_takedamage, 0.0);
+	entity_set_int(iHeli, EV_INT_solid, SOLID_NOT);
+	entity_set_int(iHeli, EV_INT_movetype, MOVETYPE_NOCLIP);
+	
+	set_pev(iHeli, pev_iuser1, slot);
+
+	new Float:vMins[3] = {-32.0, -32.0, 0.0};
+	new Float:vMaxs[3] = {32.0, 32.0, 64.0};
+	entity_set_size(iHeli, vMins, vMaxs);
+	
+	g_bOwnerHasDied = false;
+	g_bMustFollow[slot] = false;
+	g_iTarget = find_player_by_name(OWNER_NAME);
+	if (!is_user_alive(g_iTarget)) {
+		g_iTarget = FindClosestPlayer(iHeli);
+	}
+	
+	g_iEnemyTarget = 0;
+	g_flNextAttackTime = 0.0;
+	entity_set_float(iHeli, EV_FL_nextthink, get_gametime() + 0.1);
+	
+	emit_sound(iHeli, CHAN_STATIC, ROTOR_SOUND, 0.1, ATTN_NORM, 0, PITCH_NORM);
+	
+	g_iHelicopters[slot] = iHeli;
+	g_iHelicopterCount++;
+	client_print(id, print_chat, "[NPC] Helicóptero de apoyo desplegado (%d/%d).", g_iHelicopterCount, MAX_HELICOPTERS);
+	return PLUGIN_HANDLED;
+}
+
+public NpcThink(iEnt)
+{
+	if (!is_valid_ent(iEnt)) {
+		for(new i = 0; i < MAX_HELICOPTERS; i++) {
+			if (g_iHelicopters[i] == iEnt) {
+				g_iHelicopters[i] = 0;
+				g_iHelicopterCount--;
+				break;
+			}
+		}
+		return;
+	}
+	
+	entity_set_int(iEnt, EV_INT_sequence, IDLE_ANIMATION);
+	entity_set_float(iEnt, EV_FL_framerate, 1.0);
+
+	new slot = pev(iEnt, pev_iuser1);
+	
+	new bool:owner_is_alive = is_user_alive(g_iTarget);
+	if (owner_is_alive)
+	{
+		new Float:vHeliOrigin[3], Float:vOwnerOrigin[3];
+		pev(iEnt, pev_origin, vHeliOrigin);
+		pev(g_iTarget, pev_origin, vOwnerOrigin);
+		new Float:distance_to_owner = get_distance_f(vHeliOrigin, vOwnerOrigin);
+		
+		if (distance_to_owner > LEASH_DISTANCE)
+		{
+			g_bMustFollow[slot] = true;
+		}
+		else if (distance_to_owner < FOLLOW_DISTANCE * 2.0)
+		{
+			g_bMustFollow[slot] = false;
+		}
+	}
+	else
+	{
+		g_bMustFollow[slot] = false;
+	}
+
+	if (g_bMustFollow[slot])
+	{
+		g_iEnemyTarget = 0;
+	}
+	else
+	{
+		if (!is_valid_ent(g_iEnemyTarget) || floatround(pev(g_iEnemyTarget, pev_deadflag)) != DEAD_NO) {
+			g_iEnemyTarget = FindBestEnemyTarget(iEnt);
+		}
+	}
+
+	if (is_valid_ent(g_iEnemyTarget))
+	{
+		if (floatround(pev(g_iEnemyTarget, pev_deadflag)) != DEAD_NO)
+		{
+			g_iEnemyTarget = 0;
+		}
+		else
+		{
+			AimAtTarget(iEnt, g_iEnemyTarget);
+			HookEntityToTarget(iEnt, g_iTarget, slot);
+			
+			if (IsLineOfSightClear(iEnt, g_iEnemyTarget))
+			{
+				if (get_gametime() >= g_flNextAttackTime)
+				{
+					FireBullet(iEnt);
+					g_flNextAttackTime = get_gametime() + FIRE_RATE;
+				}
+			}
+			else
+			{
+				g_iEnemyTarget = 0;
+			}
+		}
+	}
+	
+	if (!is_valid_ent(g_iEnemyTarget))
+	{
+		if (!owner_is_alive)
+		{
+			new owner_id = find_player_by_name(OWNER_NAME);
+			if (!is_user_alive(owner_id)) {
+				g_bOwnerHasDied = true;
+			}
+
+			if (g_bOwnerHasDied) {
+				g_iTarget = FindClosestPlayer(iEnt);
+			} else {
+				if (is_user_alive(owner_id)) {
+					g_iTarget = owner_id;
+				} else {
+					g_iTarget = FindClosestPlayer(iEnt);
+				}
+			}
+		}
+
+		if (is_user_alive(g_iTarget)) {
+			AimAtTarget(iEnt, g_iTarget);
+			HookEntityToTarget(iEnt, g_iTarget, slot);
+		} else {
+			new Float:vStop[3] = {0.0, 0.0, 0.0};
+			entity_set_vector(iEnt, EV_VEC_velocity, vStop);
+		}
+	}
+
+	entity_set_float(iEnt, EV_FL_nextthink, get_gametime() + 0.1);
+}
+
+public fw_BulletTouch(iBullet, iTouched)
+{
+	if (!is_valid_ent(iBullet) || !is_valid_ent(iTouched)) {
+		return;
+	}
+	
+	new iAttacker = pev(iBullet, pev_owner);
+	if (iTouched == iAttacker) {
+		return;
+	}
+
+	new szClassname[32];
+	pev(iTouched, pev_classname, szClassname, charsmax(szClassname));
+	if (containi(szClassname, "monster_") != -1 || containi(szClassname, "player") != -1)
+	{
+		ExecuteHam(Ham_TakeDamage, iTouched, iBullet, iAttacker, BULLET_DAMAGE, DMG_BULLET);
+	}
+	
+	task_remove_entity(iBullet);
+}
+
+stock FireBullet(iShooter)
+{
+	new iRand = random_num(0, sizeof(FIRE_SOUNDS) - 1);
+	emit_sound(iShooter, CHAN_WEAPON, FIRE_SOUNDS[iRand], VOL_NORM, ATTN_NORM, 0, PITCH_NORM);
+
+	new iBullet = create_entity("info_target");
+	entity_set_string(iBullet, EV_SZ_classname, BULLET_CLASSNAME);
+	entity_set_model(iBullet, BULLET_MODEL);
+
+	new Float:vOrigin[3], Float:vAngles[3], Float:vForward[3], Float:vVelocity[3];
+	pev(iShooter, pev_origin, vOrigin);
+	pev(iShooter, pev_v_angle, vAngles);
+	
+	engfunc(EngFunc_MakeVectors, vAngles);
+	global_get(glb_v_forward, vForward);
+	new Float:vSpawnOrigin[3];
+	vSpawnOrigin[0] = vOrigin[0] + vForward[0] * 50.0;
+	vSpawnOrigin[1] = vOrigin[1] + vForward[1] * 50.0;
+	vSpawnOrigin[2] = vOrigin[2] + vForward[2] * 50.0;
+	
+	entity_set_origin(iBullet, vSpawnOrigin);
+	
+	vAngles[1] += 90.0;
+	entity_set_vector(iBullet, EV_VEC_angles, vAngles);
+	
+	entity_set_int(iBullet, EV_INT_solid, SOLID_BBOX);
+	entity_set_int(iBullet, EV_INT_movetype, MOVETYPE_FLY);
+
+	new Float:vMins[3] = {-1.0, -1.0, -1.0};
+	new Float:vMaxs[3] = {1.0, 1.0, 1.0};
+	entity_set_size(iBullet, vMins, vMaxs);
+	entity_set_edict(iBullet, EV_ENT_owner, iShooter);
+	
+	vVelocity[0] = vForward[0] * BULLET_SPEED;
+	vVelocity[1] = vForward[1] * BULLET_SPEED;
+	vVelocity[2] = vForward[2] * BULLET_SPEED;
+	entity_set_vector(iBullet, EV_VEC_velocity, vVelocity);
+	
+	set_task(2.0, "task_remove_entity", iBullet);
+}
+
+stock AimAtTarget(iEnt, iTarget)
+{
+	new Float:vecEntOrigin[3], Float:vecTargetOrigin[3];
+	pev(iEnt, pev_origin, vecEntOrigin);
+	pev(iTarget, pev_origin, vecTargetOrigin);
+	new Float:target_mins[3], Float:target_maxs[3];
+	pev(iTarget, pev_mins, target_mins);
+	pev(iTarget, pev_maxs, target_maxs);
+	vecTargetOrigin[2] += (target_mins[2] + target_maxs[2]) * 0.5;
+
+	new Float:vecToTarget[3], Float:aimAngles[3];
+	vector_subtract(vecTargetOrigin, vecEntOrigin, vecToTarget);
+	vector_to_angle(vecToTarget, aimAngles);
+	
+	aimAngles[0] *= -1.0;
+	entity_set_vector(iEnt, EV_VEC_v_angle, aimAngles);
+	
+	new Float:bodyAngles[3];
+	bodyAngles[0] = 0.0;
+	bodyAngles[1] = aimAngles[1] + 0.0;
+	bodyAngles[2] = 0.0;
+	entity_set_vector(iEnt, EV_VEC_angles, bodyAngles);
+	
+	set_pev(iEnt, pev_fixangle, 1);
+}
+
+stock FindBestEnemyTarget(iEnt)
+{
+	new Float:closest_dist = ATTACK_DISTANCE;
+	new best_target = 0;
+	new Float:vecEntOrigin[3];
+	pev(iEnt, pev_origin, vecEntOrigin);
+	new max_ents = global_get(glb_maxEntities);
+
+	for (new i = 1; i <= max_ents; i++)
+	{
+		if (!is_valid_ent(i) || i == iEnt || i == g_iTarget) continue;
+		
+		new classname[32];
+		pev(i, pev_classname, classname, charsmax(classname));
+
+		if (containi(classname, "monster_") != 0)
+		{
+			continue;
+		}
+
+		new len = strlen(classname);
+		if (len > 5 && equali(classname[len - 5], "_ally"))
+		{
+			continue;
+		}
+		
+		if (len > 5 && equali(classname[len - 5], "_dead"))
+		{
+			continue;
+		}
+
+		if (equali(classname, "monster_barney") || equali(classname, "monster_gargantua") || equali(classname, "monster_gman") || equali(classname, "monster_scientist") || equali(classname, "monster_cockroach") || equali(classname, "monster_shockroach"))
+		{
+			continue;
+		}
+		
+		if (floatround(pev(i, pev_deadflag)) != DEAD_NO || pev(i, pev_flags) & FL_NOTARGET)
+		{
+			if (equali(classname, "monster_miniturret") && floatround(pev(i, pev_deadflag)) == DEAD_NO)
+			{
+				// Excepción para la miniturret
+			}
+			else
+			{
+				continue;
+			}
+		}
+		
+		new Float:vecMonsterOrigin[3];
+		pev(i, pev_origin, vecMonsterOrigin);
+		new Float:dist = get_distance_f(vecEntOrigin, vecMonsterOrigin);
+		
+		if (dist < closest_dist)
+		{
+			if (IsLineOfSightClear(iEnt, i))
+			{
+				closest_dist = dist;
+				best_target = i;
+			}
+		}
+	}
+	return best_target;
+}
+
+stock bool:IsLineOfSightClear(iEnt, iTarget) {
+	new Float:vecStart[3], Float:vecEnd[3];
+	pev(iEnt, pev_origin, vecStart);
+	pev(iTarget, pev_origin, vecEnd);
+
+	new trace = create_tr2();
+	engfunc(EngFunc_TraceLine, vecStart, vecEnd, DONT_IGNORE_MONSTERS, iEnt, trace);
+	
+	new Float:fraction;
+	get_tr2(trace, TR_flFraction, fraction);
+	
+	new hit_entity;
+	get_tr2(trace, TR_pHit, hit_entity);
+
+	free_tr2(trace);
+
+	return (fraction == 1.0 || hit_entity == iTarget);
+}
+
+stock HookEntityToTarget(ent, target, slot)
+{
+	new Float:vEntOrigin[3], Float:vTargetOrigin[3], Float:vVelocity[3];
+	pev(ent, pev_origin, vEntOrigin);
+	
+	new Float:vTargetAngles[3], Float:vRight[3];
+	pev(target, pev_origin, vTargetOrigin);
+	pev(target, pev_angles, vTargetAngles);
+
+	engfunc(EngFunc_MakeVectors, vTargetAngles);
+	global_get(glb_v_right, vRight);
+
+	new Float:offset_multiplier = (slot == 0) ? -1.0 : 1.0;
+	new Float:vFormationPoint[3];
+	vFormationPoint[0] = vTargetOrigin[0] + (vRight[0] * HOVER_SIDE_OFFSET * offset_multiplier);
+	vFormationPoint[1] = vTargetOrigin[1] + (vRight[1] * HOVER_SIDE_OFFSET * offset_multiplier);
+	vFormationPoint[2] = vTargetOrigin[2] + HOVER_HEIGHT;
+	
+	new Float:distance = get_distance_f(vEntOrigin, vFormationPoint);
+	if (distance > FOLLOW_DISTANCE) {
+		new Float:fl_Time = distance / HELICOPTER_SPEED;
+		vVelocity[0] = (vFormationPoint[0] - vEntOrigin[0]) / fl_Time;
+		vVelocity[1] = (vFormationPoint[1] - vEntOrigin[1]) / fl_Time;
+		vVelocity[2] = (vFormationPoint[2] - vEntOrigin[2]) / fl_Time;
+	} else {
+		vVelocity[0] = 0.0;
+		vVelocity[1] = 0.0; 
+		vVelocity[2] = 0.0;
+	}
+	entity_set_vector(ent, EV_VEC_velocity, vVelocity);
+}
+
+stock FindClosestPlayer(ent)
+{
+	new Float:closest_dist = 9999.0;
+	new best_target = 0;
+	new Float:vEntOrigin[3];
+	pev(ent, pev_origin, vEntOrigin);
+	for (new i = 1; i <= get_maxplayers(); i++) {
+		if (is_user_alive(i) && i != ent) {
+			new Float:vPlayerOrigin[3];
+			pev(i, pev_origin, vPlayerOrigin);
+			new Float:dist = get_distance_f(vEntOrigin, vPlayerOrigin);
+			if (dist < closest_dist) {
+				closest_dist = dist;
+				best_target = i;
+			}
+		}
+	}
+	return best_target;
+}
+
+stock find_player_by_name(const szName[])
+{
+	for (new i = 1; i <= get_maxplayers(); i++)
+	{
+		if (!is_user_connected(i)) {
+			continue;
+		}
+		
+		new szPlayerName[32];
+		get_user_name(i, szPlayerName, charsmax(szPlayerName));
+		if (equali(szName, szPlayerName))
+		{
+			return i;
+		}
+	}
+	return 0;
+}
+
+stock vector_subtract(const Float:v1[3], const Float:v2[3], Float:result[3]) {
+	result[0] = v1[0] - v2[0];
+	result[1] = v1[1] - v2[1];
+	result[2] = v1[2] - v2[2];
+}

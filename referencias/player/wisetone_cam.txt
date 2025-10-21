@@ -1,0 +1,126 @@
+#include <amxmodx>
+#include <engine>
+
+new const pl_cm_class[] = "PlayerCamera"
+new bool: cmra[32];
+new cam_chat
+
+public plugin_init() 
+{
+    // Plugin Register
+    register_plugin("3rd Person View Camera", "1.0", "Wisetone");
+    register_clcmd("say /cam", "cmdCam")
+    register_think(pl_cm_class, "Think_PlayerCamera")
+    cam_chat = register_cvar("amx_camchatpublic_enable", "0")
+}
+
+public cmdCam(id)
+{
+    if(get_pcvar_num(cam_chat)) // Checks if the cvar is set to 1
+    {
+        Create_PlayerCamera(id); // Creates the camera even when the cvar is set to 1
+        return PLUGIN_CONTINUE; // Allows the chat message to continue normally
+    }
+    else
+    {
+        // If the cvar is not set to 1, create the camera and handle the message
+        Create_PlayerCamera(id);
+        return PLUGIN_HANDLED; // Stops further processing of the message
+    }
+    // Add an explicit return statement here as fallback
+    return PLUGIN_HANDLED;
+}
+
+Create_PlayerCamera(id)
+{
+    if(!is_user_alive(id))
+    {
+        return;
+    }
+
+    if(!cmra[id]) {
+        new ent = -1
+        while ((ent = find_ent_by_class(ent,pl_cm_class)) != 0)
+        {
+            if (entity_get_edict(ent,EV_ENT_owner) == id)
+            {
+                attach_view(id , ent)
+                return
+            }
+        }
+        ent = create_entity("info_target")
+
+        if( !ent )
+            return;
+        
+        entity_set_string(ent, EV_SZ_classname, pl_cm_class) 
+        
+        entity_set_model(ent, "models/w_usp.mdl")
+        
+        entity_set_byte(ent, EV_INT_solid, SOLID_TRIGGER)
+        entity_set_int(ent, EV_INT_movetype, MOVETYPE_FLYMISSILE)
+        
+        entity_set_edict(ent, EV_ENT_owner, id)
+        
+        entity_set_int(ent, EV_INT_rendermode, kRenderTransTexture)
+        entity_set_float(ent, EV_FL_renderamt, 0.0 )
+    
+        attach_view(id,ent)
+        entity_set_float(ent, EV_FL_nextthink, get_gametime())
+        cmra[id] = true;
+    }
+    else
+    {
+        cmra[id] = false;
+    }
+}
+
+public Think_PlayerCamera(ent)
+{
+    static owner
+    owner = entity_get_edict(ent, EV_ENT_owner)
+
+    /*
+    static iButtons;
+    iButtons = entity_get_int(owner, EV_INT_button)
+    */
+
+    if(!cmra[owner] || !is_user_alive(owner))
+    {
+        attach_view(owner, owner)
+        remove_entity(ent)
+        return PLUGIN_CONTINUE;
+    }
+
+    static Float:origin[3], Float:fAngle[3],Float:origin2[3];
+    entity_get_vector(owner,EV_VEC_origin,origin)
+    entity_get_vector(owner,EV_VEC_v_angle,fAngle)
+     
+    origin2[0] = origin[0]
+    origin2[1] = origin[1]
+    origin2[2] = origin[2]
+     
+    static Float:fVBack[3];
+    angle_vector(fAngle, ANGLEVECTOR_FORWARD, fVBack);
+     
+    origin[2] += 20.0;
+
+    origin[0] += (-fVBack[0] * 100.0);
+    origin[1] += (-fVBack[1] * 100.0);
+    origin[2] += (-fVBack[2] * 100.0);
+     
+    trace_line(owner,origin2,origin,origin)
+     
+    entity_set_vector(ent,EV_VEC_origin,origin)
+
+    entity_get_vector(owner,EV_VEC_velocity,origin2)
+    entity_set_vector(ent,EV_VEC_velocity,origin2)
+
+    entity_set_vector(ent,EV_VEC_angles,fAngle)
+    entity_set_float(ent, EV_FL_nextthink, get_gametime())
+
+    return PLUGIN_CONTINUE;
+}
+/* AMXX-Studio Notes - DO NOT MODIFY BELOW HERE
+*{\\ rtf1\\ ansi\\ deff0{\\ fonttbl{\\ f0\\ fnil Tahoma;}}\n\\ viewkind4\\ uc1\\ pard\\ lang1030\\ f0\\ fs16 \n\\ par }
+*/

@@ -1,0 +1,395 @@
+//pBot version
+new PB_VERSION[] = "AEROBOT.XYZ version Beta 1.0"
+
+/*pBots switching given weapons randomly all the time in Counter-Strike.
+Normally switches only on touching wall. Required for non Deathmatch mode, because 
+by default it gives weapon for pBot. This should be enabled for Half-Life/Deathmatch Classic
+to give special gear to pBots.
+NOTE: Comment this only for Counter-Strike FFA/Team Deathmatch mode and Zombie Mode*/
+#define PB_WEAPON_MODE
+
+/*pBots enemy selection. Adrenaline Gamer TEAM game is not implemented yet.
+NOTE: Comment this for Half-Life, Adrenaline Gamer FFA and FFAX mode 
+and for Counter-Strike FFA Deathmatch. Enable for non-deathmatch/Team Deathmatch Counter-Strike.*/
+//#define PB_TEAMGAME
+
+//pBot automatically fills server.
+#define PB_AUTOFILL
+
+//Remove spread for pBots in Counter-Strike.
+#define PB_WEAPON_SPREAD
+
+//Jump Bots. For Half-Life and Deathmatch Classic.
+#define PB_TRICK_MODE
+
+//Prefix for Bot
+#define PB_PREFIX
+
+//pBots using sprays and flashlights.
+#define PB_USE_IMPULSE
+
+//pBots trashtalk.
+#define PB_TRASHTALK
+
+/*pBots with random slowmotion movement.
+If you want to make cool slowmotion capture*/
+//#define PB_SLOWMOTION
+
+//Rotate Bots with Roll angle. Crazy stuff.
+//#define DEBUG_ROLL_BOT
+
+#define FALSE 0
+#define TRUE 1
+
+//Game mod.
+#define PB_GAME_MOD_HL 0
+#define PB_GAME_MOD_CSTRIKE 1
+#define PB_GAME_MOD_CZERO 2
+#define PB_GAME_MOD_DMC 3
+#define PB_GAME_MOD_AG 4
+
+//pBot starts with limited amount of bullet.
+#define PB_SUPPLY 200
+
+//Entity limit.
+#define MAX_GIB_LIMIT 30
+
+//Mark items.
+#define ITEM_KEY 490761
+
+//Bind timers.
+#define PB_MAX_DIFF_ACTION_TIME 0.25
+#define PB_AVERAGE_DIFF_ACTION_TIME 0.65
+#define PB_MEDIUM_DIFF_ACTION_TIME 0.75
+#define PB_LOW_DIFF_ACTION_TIME 0.85
+
+//Difficulty
+#define PB_MAX_DIFF 4
+#define PB_AVERAGE_DIFF 3
+#define PB_MEDIUM_DIFF 2
+#define PB_LOW_DIFF 1
+
+//TFC
+#define TEAM_A 1
+#define TEAM_B 2
+
+#define NULLENT -1
+#define NULL 0
+#define PDATA_SAFE 2
+#define CBASE_PLAYER 5
+#define CBASE_WEAPON 4
+
+#define MAXPLAYERS 32
+#define PLAYER_JUMP 6
+#define PLAYER_PLACEHOLDER 54
+
+/*Ragebot distance
+NOTE: increase this value, if pBot is not attacking*/
+#define RAGEBOT_MAX_DISTANCE 1500.0
+
+//Movement speed reset.
+#define DEFAULT_MOVE_SPEED 0.0
+#define MAX_MOVE_SPEED 400.0
+#define START_TIME 150
+
+//Chat delay
+#define FAKE_PLAYER_CHAT_DELAY 5.0
+
+//Ragebot reaction
+#define FAKE_PLAYER_ATTACK_DELAY_MIN 0.015
+#define FAKE_PLAYER_ATTACK_DELAY_MAX 0.050
+
+//Fakeplayer think delay.
+#define FAKE_PLAYER_THINK_TIMER_MIN 1.0
+#define FAKE_PLAYER_THINK_TIMER_MAX 3.0
+
+//Fakeplayer touch delay.
+#define FAKE_PLAYER_WALLTOUCH_TIMER 0.1
+
+//pBot angles and viewangles
+#define DEFAULT_ANGLE 0.0
+#define MAX_ANGLE_PITCH 90.0
+#define MAX_ANGLE_YAW 180.0
+#define MAX_ANGLE_ROLL 180.0
+
+//Longjump animation.
+#define PB_ANIMATION 0.1
+
+//Fakeplayer random speed.
+#define PB_MINSPEED 700.0
+#define PB_MAXSPEED 1000.0
+
+//Impulse
+#define PB_SPIMPULSE 201
+#define PB_FLIMPULSE 100
+
+//Weapons for Half-Life and Adrenaline Gamer.
+#define PB_WEAPON_GAUSS 1
+#define PB_WEAPON_AR 2
+#define PB_WEAPON_SNARK 3
+#define PB_WEAPON_357 4
+#define PB_WEAPON_HORNET 5
+#define PB_WEAPON_EGON 6
+#define PB_WEAPON_RPG 7
+#define PB_WEAPON_HANDGRENADE 8
+#define PB_WEAPON_SHOTGUN 9
+#define PB_WEAPON_CROSSBOW 10
+#define PB_WEAPON_TRIPMINE 11
+#define PB_WEAPON_SATCHEL 12
+
+//Welcome message.
+#define RED 0
+#define GREEN 100
+#define BLUE 150
+#define X_AXIS -1.0
+#define Y_AXIS 0.15
+#define EFFECTS 2
+#define FXTIME 0.025
+#define HOLDTIME 5.0
+#define FADEINTIME 0.025
+#define FADEOUTTIME 0.5
+#define CHANNEL 3
+
+//Welcome delay.
+#define PB_WELCOME_TIMER 3.0
+
+//Protection timer.
+#define PB_PROTECTION_TIMER 3.0
+
+//Gameplay task data
+enum _: TASK_MANAGER (+= 100)
+{
+	PB_WELCOME_MSG = 3037,
+	PB_FILLBOT,
+	PB_SPAWNGEAR,
+	PB_LONGJUMP,
+	PB_PROTECTION
+}
+
+//Counter-Strike offsets.
+stock m_iTeam = 114 //int
+stock random_seed = 96 //int
+stock m_pPlayer = 41 //int
+stock m_flAccuracy = 62 //float
+stock m_pActiveItem = 373 //CBasePlayerItem
+stock m_iClip = 51 //int
+stock m_rgAmmo_556 = 380 //556 aug m4a1 sgg550 sgg552 galil famas.
+stock m_rgAmmo_762 = 378 //762 ak47 scout g3sg1.
+
+//Half-Life offsets.
+stock m_rgAmmo_9mmAR = 312 //rifle bullets.
+stock m_rgAmmo_9mmAR_grenades = 313 //rifle grenades.
+stock m_rgAmmo_gauss = 315 //gauss cells.
+stock m_rgAmmo_snark = 321 //snarks.
+stock m_rgAmmo_hornet = 322 //hornet.
+stock m_rgAmmo_357 = 314 //357.
+stock m_rgAmmo_rocket = 316 //rockets.
+stock m_rgAmmo_handgrenade = 320 //handgrenades.
+stock m_rgAmmo_buckshot = 311 //shotgun shells.
+stock m_rgAmmo_crossbow = 317 //ammo crossbow.
+stock m_rgAmmo_tripmine = 318 //ammo tripmine.
+stock m_rgAmmo_satchel = 319 //ammo satchel.
+
+//Adrenaline Gamer offsets.
+stock m_rgAmmo_9mmAR_aghl = 306 //rifle bullets.
+stock m_rgAmmo_9mmAR_grenades_aghl = 307 //rifle grenades.
+stock m_rgAmmo_gauss_aghl = 309 //gauss cells.
+stock m_rgAmmo_snark_aghl = 315 //snarks.
+stock m_rgAmmo_hornet_aghl = 316 //hornet.
+stock m_rgAmmo_357_aghl = 308 //357.
+stock m_rgAmmo_rocket_aghl = 310 //rockets.
+stock m_rgAmmo_handgrenade_aghl = 314 //handgrenades.
+stock m_rgAmmo_buckshot_aghl = 305 //shotgun shells.
+stock m_rgAmmo_crossbow_aghl = 311 //ammo crossbow.
+stock m_rgAmmo_tripmine_aghl = 312 //ammo tripmine.
+stock m_rgAmmo_satchel_aghl = 313 //ammo satchel.
+
+#if defined PB_TRASHTALK
+
+	//Bot chatting trashtalk.
+	new const c_bot_chat_a[][] = 
+	{
+		"SORRY JUST CLEANING THE JIZZ OF MY KEYBOARD!!",	
+		"rest in spaghetti never forgetti",
+		"I PLAY WITH A RACING WHEEL...",
+		"oops, I must have chosen easy bots by accident...",
+		"bhopped to your mom's house last Sunday, top kek.",	
+		"ez katka 8)",
+		"go climb a wall of dicks.",
+		"i kissed your mom last night. Her breath was globally offensive",
+		"isn't it uncomfortable playing Counterstrike in the kitchen?",
+		"yo mama so fat when she plays Overpass, you can shoot her on Mirage.",
+		"cheer up, your small dick isnt noticealbe under ur badness.",
+		"server cvar 'sv_rekt' changed to 1",
+		"Options -> How To Play",
+		"bro you couldn't hit an elephant in the ass with a shotgun with aim like that.",
+		"1, sit down dog",
+		"mad cuz bad",
+		"can't hear you from the bottom of the scoreboard.",
+		"you must be fat because you have a nice voice, and the air needs enough space in your lungs to articulate the sound right.",
+		"you shoot like an AI designed by a 10 year old",
+		"Internet Explorer is faster than your reactions."
+	}
+
+	//Bot chatting trashtalk rage.
+	new const c_bot_chat_b[][] = 
+	{
+		"shut up, you have two dads.",	
+		"fuckin Ladislav suka Kovacs",
+		"you Fucking Bitch Why You Bully Me",
+		"you only killed me because I ran out of health...",
+		"LOL watchin u play this game is like watching helen keller play tennis.",
+		"stop playing like KQLY why cant you play more like Tarik?",
+		"guys, if we want to win this, stop writing fucking Klingon, can't understand shit.",
+		"shut up, I fucked your dad.",
+		"sorry, I don't speak star wars.",
+		"if I wanted to listen to an asshole I would fart.",
+		"kick your teammate, he's flooring.",
+		"how'd you hit the ACCEPT button with that aim?",
+		"hey mate, what controller are you using?",
+		"you know all those times your parents said video games would get you nowhere? They were right.",
+		"shut up kid and talk to me when your balls have reached the bottom of your spiderman underwear...",
+		"i thought I was ugly but evolution really took a step back with you.",
+		"your idea of a comeback is jerking off into a fan.",
+		"aha! I see the fuck-up fairy has visited us again.",
+		"is your ass jealous of the amount of shit that just came out of your mouth?",
+		"imagine your potential if you didn't have parkinsons."
+	}
+
+#endif
+
+//Bot names
+new const c_name[][] = 
+{
+	"baimless",	
+	"L4FN weak rat",
+	"Pikaz",
+	"uff ya $$",
+	"Leka",
+	"get gamesense",
+	"desync",
+	"f a c e l e s s",
+	"Slowdexx",
+	"$hiZZZa",
+	"XANTARESPEEK",
+	"RIN1337",
+	"skeet user",
+	"hvh winner",
+	"KQLY",
+	"A I M W A R E",
+	"CASHMEISTER GG",
+	"Legit HVH unique",
+	"XANAX",
+	"Glide Romis",
+	"RAGEBOT",
+	"melancholia",
+	"anim breaker",
+	"HEXACOREONTOP",
+	"keep crying dog",
+	"ScreaM 1taps",
+	"TALIBANPEEK",
+	"Juice WRLD",
+	"owned player",
+	"MAD CHEATER",
+	"Savannah",
+	"hvh police"
+}
+
+//Bot model
+new const c_model[][] = 
+{
+	"gordon",	
+	"barney",
+	"bbbbarney",
+	"gina",
+	"gman",
+	"helmet",
+	"hgrunt",
+	"ivan",
+	"recon",
+	"robo",
+	"scientist",
+	"skeleton",
+	"tmcm",
+	"zombie"
+}
+
+//Bot model color.
+new const c_model_color[][] = 
+{
+	"0",	
+	"30",
+	"60",
+	"90",
+	"120",
+	"150",
+	"180",
+	"210",
+	"240",
+	"270",
+	"300"
+}
+
+//Entities
+new c_max_gibs
+
+//Store all players amount.
+new c_total_players
+new c_player_count
+
+//pBot action variables.
+new f_msecval
+new c_info_player
+new c_maxfakeclient
+new c_fakeplayer_game_mod
+new bool: c_first_player
+new bool: c_fakeplayer_ag_ffax
+new bool: c_fakeplayer_teammate
+new c_fakeplayer_button[MAXPLAYERS + 1]
+new c_fakeplayer_hl_weapon[MAXPLAYERS + 1]
+new c_fakeplayer_random_action[MAXPLAYERS + 1]
+new bool: c_fakeplayer_action[MAXPLAYERS + 1]
+new bool: c_fakeplayer_crouch[MAXPLAYERS + 1]
+new bool: c_fakeplayer_weapon[MAXPLAYERS + 1]
+new bool: c_fakeplayer_weapon_explosion[MAXPLAYERS + 1]
+new bool: c_fakeplayer_edict[MAXPLAYERS + 1]
+new bool: c_fakeplayer_walltouch[MAXPLAYERS + 1]
+new bool: c_fakeplayer_attacking[MAXPLAYERS + 1]
+new bool: c_fakeplayer_trick_move[MAXPLAYERS + 1]
+new Float: c_fakeplayer_reaction_time[MAXPLAYERS + 1]
+new Float: c_fakeplayer_think_time[MAXPLAYERS + 1]
+new Float: c_fakeplayer_attack_time[MAXPLAYERS + 1]
+new Float: c_fakeplayer_walltouch_time[MAXPLAYERS + 1]
+new Float: c_fakeplayer_forward_speed[MAXPLAYERS + 1]
+new Float: c_fakeplayer_side_speed[MAXPLAYERS + 1]
+new Float: c_fakeplayer_chat_delay[MAXPLAYERS + 1]
+new Float: c_fakeplayer_angles[MAXPLAYERS + 1][3]
+new Float: c_fakeplayer_position[MAXPLAYERS + 1][3]
+new Float: c_fakeplayer_view[MAXPLAYERS + 1][3]
+new Float: c_fake_player_motion = PB_MAXSPEED
+new Float: c_fake_player_frametime
+
+//Default angle
+new Float: DEFAULT_V_ANGLE[3] = 
+{
+	0.0,
+	0.0,
+	0.0
+}
+
+public plugin_precache()
+{
+	//Get current game mod.
+	Function_CurrentGame();
+	
+	//Weapon lightning for DMC.
+	if(c_fakeplayer_game_mod == PB_GAME_MOD_DMC)
+	{
+		engfunc(EngFunc_PrecacheModel, "models/g_light.mdl");
+		engfunc(EngFunc_PrecacheModel, "models/pow_quad.mdl");
+		engfunc(EngFunc_PrecacheModel, "models/armour_r.mdl");
+		engfunc(EngFunc_PrecacheModel, "models/w_battery.mdl");
+		engfunc(EngFunc_PrecacheSound, "items/damage.wav");
+		engfunc(EngFunc_PrecacheSound, "items/damage2.wav");
+	}			
+}

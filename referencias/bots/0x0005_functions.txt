@@ -1,0 +1,1305 @@
+//Simply trace to target. NOTE: this is just trace example, to check for doors, boxes need to be done more.
+stock bool: Function_MonsterDetection(Float: iOrigin[3], Float: fOrigin[3], bool: IGNORE_PLAYER = true)
+{
+	new TRACE = NULL;
+	
+	engfunc(EngFunc_TraceLine, iOrigin, fOrigin, (IGNORE_PLAYER ? IGNORE_MONSTERS : DONT_IGNORE_MONSTERS), NULL, TRACE);
+    
+	new Float: flFraction;
+	get_tr2(TRACE, TR_flFraction, flFraction);
+    
+	/*Should add here view in cone, if you want to make pBot only target
+	player on his view angles.*/
+	if(flFraction == 1.0)
+		return true;
+		
+	return false;
+}
+
+//Retrieve here our info.
+stock Function_RetrieveMapInfo(const classname[])
+{
+	new iEnt = NULLENT;
+	
+	//Found, collected.
+	while((iEnt = engfunc(EngFunc_FindEntityByString, iEnt, "classname", classname)) != NULL)
+		c_info_player ++;
+}
+
+//Break player movement.
+stock Function_ResetPlayerMove(pBot)
+	return engfunc(EngFunc_RunPlayerMove, pBot, DEFAULT_V_ANGLE, DEFAULT_MOVE_SPEED, DEFAULT_MOVE_SPEED, NULL, NULL, NULL, START_TIME);
+
+//Set movement action during combat. First is for Counter-Strike, second for other.
+stock Function_RunPlayerMove(pBot, iButton, pButton, iImpulse, f_msecval)
+{
+	//Cool movement for Counter-Strike.
+	if(RUN_APB_GAME_COUNTERSTRIKE())
+		return engfunc(EngFunc_RunPlayerMove, pBot, c_fakeplayer_angles[pBot], c_fakeplayer_forward_speed[pBot], c_fakeplayer_side_speed[pBot], NULL, iButton, iImpulse, f_msecval);	
+					
+	//For Half-Life and Deathmatch Classic and other.	
+	else
+		return engfunc(EngFunc_RunPlayerMove, pBot, c_fakeplayer_angles[pBot], c_fakeplayer_forward_speed[pBot], c_fakeplayer_side_speed[pBot], NULL, pButton, iImpulse, f_msecval);
+}
+
+//Pick random action.
+stock Function_SetMovement(pBot)
+{
+	//Set next think.
+	c_fakeplayer_think_time[pBot] = get_gametime() + random_float(FAKE_PLAYER_THINK_TIMER_MIN, FAKE_PLAYER_THINK_TIMER_MAX);
+	c_fakeplayer_crouch[pBot] = false;
+
+	//This is the example. Set your combination here.
+	c_fakeplayer_random_action[pBot] = random_num(1, 15);	
+			
+	switch(c_fakeplayer_random_action[pBot])
+	{	
+		case 1: c_fakeplayer_button[pBot] = IN_FORWARD | IN_ATTACK2;
+		case 2: c_fakeplayer_button[pBot] = IN_BACK | IN_JUMP;
+		case 3: c_fakeplayer_button[pBot] = IN_FORWARD | IN_MOVELEFT;
+		case 4: c_fakeplayer_button[pBot] = IN_BACK | IN_MOVERIGHT | IN_LEFT;
+		case 5: c_fakeplayer_button[pBot] = IN_FORWARD | IN_RIGHT;
+		case 6: c_fakeplayer_button[pBot] = IN_FORWARD | IN_USE;
+		case 7:
+		{	
+			//Let it do this trick once.
+			c_fakeplayer_button[pBot] = IN_FORWARD | IN_JUMP | IN_DUCK;
+			c_fakeplayer_think_time[pBot] = get_gametime() + FAKE_PLAYER_THINK_TIMER_MIN / 2;
+		}	
+		case 8..15:
+		{
+			//Set max speed
+			c_fakeplayer_forward_speed[pBot] = MAX_MOVE_SPEED;
+			c_fakeplayer_side_speed[pBot] = MAX_MOVE_SPEED;
+			
+			//Longjump for HL mods.
+			if(!RUN_APB_GAME_COUNTERSTRIKE())
+			{
+				c_fakeplayer_button[pBot] = IN_FORWARD | IN_DUCK;
+
+				//Small animation delay between button hold.
+				remove_task(pBot + PB_LONGJUMP);
+				set_task(PB_ANIMATION, "Task_SetAnimation", pBot + PB_LONGJUMP);
+			}	
+
+			//Double duck on repeat.
+			else
+				c_fakeplayer_button[pBot] = IN_FORWARD | IN_MOVELEFT | IN_DUCK;
+
+			c_fakeplayer_think_time[pBot] = get_gametime() + FAKE_PLAYER_THINK_TIMER_MIN / 5;
+			
+			c_fakeplayer_crouch[pBot] = true;
+		}			
+	}
+	
+	#if defined PB_WEAPON_MODE
+	
+		//Randomly switch between weapon.
+		Function_SelectWeapon(pBot);
+		
+	#endif
+	
+}
+
+//Force look at something during world exploring. Set your own angles here
+stock Function_SetAngles(pBot)
+{	
+	//Pitch, not too high or down.	
+	if((c_fakeplayer_angles[pBot][0]) > DEFAULT_ANGLE)												
+		c_fakeplayer_angles[pBot][0] -= random_float(DEFAULT_ANGLE, MAX_ANGLE_PITCH / 2);
+	else
+		c_fakeplayer_angles[pBot][0] += random_float(DEFAULT_ANGLE, MAX_ANGLE_PITCH / 2);					
+				
+	//Yaw
+	c_fakeplayer_angles[pBot][1] -= random_float(DEFAULT_ANGLE, MAX_ANGLE_YAW / 2);	
+		
+	//Roll. Can rotate it's model.
+	#if defined DEBUG_ROLL_BOT
+	
+		if((c_fakeplayer_angles[pBot][2]) > DEFAULT_ANGLE)												
+			c_fakeplayer_angles[pBot][2] -= random_float(DEFAULT_ANGLE, MAX_ANGLE_ROLL);
+		else
+			c_fakeplayer_angles[pBot][2] += random_float(DEFAULT_ANGLE, MAX_ANGLE_ROLL);
+
+	#else
+
+		c_fakeplayer_angles[pBot][2] = DEFAULT_ANGLE;
+		
+	#endif
+	
+}
+
+//Apply angles.
+stock Function_ApplyAngles(pBot, Float: fAngles[3])
+{
+
+	#define ANGLE_CORRECTION 3.0
+
+	set_pev(pBot, pev_v_angle, fAngles);
+	
+	//Correct angle.
+	fAngles[0] /= - ANGLE_CORRECTION;
+
+	set_pev(pBot, pev_angles, fAngles);
+	set_pev(pBot, pev_fixangle, 1);	
+}
+
+//Emulate commands.
+stock Function_FakeClientCommand(pBot, const iCommand[], const iArg[] = "", const _iArg[] = "")
+	return engclient_cmd(pBot, iCommand, iArg, _iArg);
+
+//Get name.	
+stock Function_GetPlayerName(pBot)
+{
+	new pName[32];    
+	engfunc(EngFunc_InfoKeyValue, engfunc(EngFunc_GetInfoKeyBuffer, pBot), "name", pName, charsmax(pName));
+	
+	return pName;
+}
+
+//Return game mode.
+stock Function_GetGameMode()
+{
+	//Get the game title.
+	new c_mode_name[32];	
+	get_modname(c_mode_name, charsmax(c_mode_name));
+	
+	return c_mode_name;
+}
+
+//Mods requires different check.
+stock Function_ReturnPlayerMode(pBot, pEnemy)
+{
+	new iEntityPlayer;
+	iEntityPlayer = is_user_alive(pEnemy) && pev(pEnemy, pev_solid) > SOLID_NOT && pEnemy != pBot;
+	
+	if(!iEntityPlayer)
+		return NULL;
+		
+	//Some sort of mess.
+	static pBotTeam[16], pEnemyTeam[16];	
+
+	//Counter-Strike. Counter-Strike Team Deathmatch.
+	if(RUN_APB_GAME_COUNTERSTRIKE() && c_fakeplayer_teammate)
+	{
+		//Pass invalid index.
+		if(pev_valid(pBot) && pev_valid(pEnemy) == PDATA_SAFE)				
+			return iEntityPlayer && get_pdata_int(pBot, m_iTeam, CBASE_PLAYER) != get_pdata_int(pEnemy, m_iTeam, CBASE_PLAYER);	
+	}
+
+	//Adrenaline Gamer TEAM game.
+	else if(c_fakeplayer_game_mod == PB_GAME_MOD_AG && c_fakeplayer_teammate)
+		return iEntityPlayer && pev(pBot, pev_team) != pev(pEnemy, pev_team);	
+		
+	//Half-Life TDM.
+	else if(c_fakeplayer_game_mod == PB_GAME_MOD_HL && c_fakeplayer_teammate)
+		return iEntityPlayer && hl_get_user_team(pBot, pBotTeam, charsmax(pBotTeam)) != hl_get_user_team(pEnemy, pEnemyTeam, charsmax(pEnemyTeam));			
+
+	/*CSDM/Adrenaline Gamer FFA and FFAX/Deathmatch Classic.
+	NOTE: If you want to make support teams for Adrenaline Gamer, start from here*/
+	else
+		return iEntityPlayer;
+
+	return NULL;		
+}
+
+//Example to give weapon.
+stock Function_SetPrimaryWeapon(pBot)
+{
+	//Counter-Strike.
+	if(RUN_APB_GAME_COUNTERSTRIKE())
+	{		
+		if(pev_valid(pBot) == PDATA_SAFE)
+		{
+			//M4A1
+			if(get_pdata_int(pBot, m_iTeam, CBASE_PLAYER) == TEAM_B)
+				Function_SpawnGear(pBot, "weapon_m4a1");
+					
+			//AK	
+			else
+				Function_SpawnGear(pBot, "weapon_ak47");
+		}	
+
+		return;
+	}
+				
+	//Half-Life and Adrenaline Gamer
+	else if(RUN_APB_GAME_AGHL())
+	{	
+		Function_ReturnWeapon(pBot);
+
+		return;
+	}
+
+	//Deathmatch Classic.
+	else if(c_fakeplayer_game_mod == PB_GAME_MOD_DMC)
+	{
+		#define ROCKET_ITEM 5
+
+		//Give Rocketlauncher.
+		Function_SpawnGear(pBot, "weapon_rocketlauncher");
+				
+		for(new pGear = 1; pGear < ROCKET_ITEM; pGear ++)
+			Function_SpawnGear(pBot, "item_rockets");
+
+		return;
+	}											
+}
+
+//Example to switch on attack to primary.
+stock Function_SelectPrimaryWeapon(pBot)
+{
+	//Counter-Strike.
+	if(RUN_APB_GAME_COUNTERSTRIKE())
+	{
+		if(pev_valid(pBot) == PDATA_SAFE)
+		{
+			//M4A1
+			if(get_pdata_int(pBot, m_iTeam, CBASE_PLAYER) == TEAM_B)
+				Function_FakeClientCommand(pBot, "weapon_m4a1");
+					
+			//AK	
+			else
+				Function_FakeClientCommand(pBot, "weapon_ak47");
+		}	
+
+		return;
+	}
+				
+	//Half-Life and Adrenaline Gamer.
+	else if(RUN_APB_GAME_AGHL())
+	{
+		//Depended on given weapon, switch to.
+		switch(c_fakeplayer_hl_weapon[pBot])
+		{
+			case 1: Function_FakeClientCommand(pBot, "weapon_gauss");
+			case 2: Function_FakeClientCommand(pBot, "weapon_9mmAR");
+			case 3: Function_FakeClientCommand(pBot, "weapon_snark");
+			case 4: Function_FakeClientCommand(pBot, "weapon_357");
+			case 5:
+			{
+				if(c_fakeplayer_ag_ffax)
+					Function_FakeClientCommand(pBot, "weapon_9mmAR");
+				else	
+					Function_FakeClientCommand(pBot, "weapon_hornetgun");
+			}
+			case 6: Function_FakeClientCommand(pBot, "weapon_egon");
+			case 7: Function_FakeClientCommand(pBot, "weapon_rpg");
+			case 8: Function_FakeClientCommand(pBot, "weapon_handgrenade");
+			case 9: Function_FakeClientCommand(pBot, "weapon_shotgun");
+			case 10: Function_FakeClientCommand(pBot, "weapon_crossbow");
+			case 11: Function_FakeClientCommand(pBot, "weapon_tripmine");
+			case 12: Function_FakeClientCommand(pBot, "weapon_satchel");
+		}
+
+		return;	
+	}
+}
+
+//Example to switch on touching wall to melee.
+stock Function_SelectMeleeWeapon(pBot)
+{
+	//Counter-Strike.
+	if(RUN_APB_GAME_COUNTERSTRIKE())
+	{				
+		Function_FakeClientCommand(pBot, "weapon_knife");
+
+		return;
+	}	
+		
+	//Half-Life and Adrenaline Gamer.
+	else if(RUN_APB_GAME_AGHL())
+	{	
+		Function_FakeClientCommand(pBot, "weapon_crowbar");
+
+		return;
+	}	
+}
+
+//Example to switch on exploring world.
+stock Function_SelectWeapon(pBot)
+{
+	//Maybe let them switch default weapons?
+	new iRandomWeapon;	
+	iRandomWeapon = random_num(1, 2);
+	
+	switch(iRandomWeapon)
+	{
+		//Switch.
+		case 1: Function_SelectPrimaryWeapon(pBot);	
+			
+		//Knife by default.	Stop switching on empty clip.
+		case 2:
+		{
+			if(pev_valid(pBot) != PDATA_SAFE || !is_user_alive(pBot))
+				return;	
+	
+			static iWeapon, iClip;
+	
+			iWeapon = get_pdata_cbase(pBot, m_pActiveItem, CBASE_PLAYER);
+
+			if(iWeapon != NULLENT)
+				iClip = get_pdata_int(iWeapon, m_iClip, CBASE_WEAPON);
+
+			if(iClip > NULL)
+				Function_SelectMeleeWeapon(pBot);
+		}		
+	}
+}
+
+//Current game.
+stock Function_CurrentGame()
+{
+	//Get the game title.	
+	new iGameMode[32];	
+	iGameMode = Function_GetGameMode();
+	
+	//Game mode is Counter-Strike.
+	if(equal(iGameMode, "cstrike"))
+		return c_fakeplayer_game_mod = PB_GAME_MOD_CSTRIKE;
+		
+	//Condition Zero.	
+	else if(equal(iGameMode, "czero"))	
+		return c_fakeplayer_game_mod = PB_GAME_MOD_CZERO;
+		
+	//Deathmatch Classic.	
+	else if(equal(iGameMode, "dmc"))	
+		return c_fakeplayer_game_mod = PB_GAME_MOD_DMC;		
+		
+	//Game mode is Half-Life.	
+	else if(equal(iGameMode, "valve"))
+		return c_fakeplayer_game_mod = PB_GAME_MOD_HL;
+
+	//Game mode is Adrenaline Gamer.	
+	else if(equal(iGameMode, "ag"))
+	{
+		//Detect, is this is FFAX mode running.
+		new ModeAdrenaline[32];
+		get_cvar_string("sv_ag_gamemode", ModeAdrenaline, charsmax(ModeAdrenaline));
+		
+		if(equal(ModeAdrenaline, "ffax"))
+			c_fakeplayer_ag_ffax = true;
+		else
+			c_fakeplayer_ag_ffax = false;
+	
+		return c_fakeplayer_game_mod = PB_GAME_MOD_AG;
+	}	
+
+	return NULL;			
+}
+
+//Set model randomly. Apply topcolor.
+stock Function_SelectPlayerModel(pBot, infokeybuffer)
+{
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "model", c_model[random(sizeof c_model)]);	
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "topcolor", c_model_color[random(sizeof c_model_color)]);
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "bottomcolor", c_model_color[random(sizeof c_model_color)]);
+}
+
+//Set msec value.
+stock Function_StartCompute(Float: i_msecval)
+{
+	i_msecval *= c_fake_player_motion;	
+	f_msecval = floatround(i_msecval);
+}
+
+//Returns players and bots in total.
+stock Function_ReturnTotalPlayers()
+{
+	new current_free_slots;
+	current_free_slots = MaxClients - get_cvar_num("apb_bot_amount") - 1;
+
+	if(current_free_slots < 1)
+		current_free_slots = NULL;	
+
+	c_total_players = (c_maxfakeclient - current_free_slots + c_player_count);	
+	//c_total_players = (c_maxfakeclient + c_player_count);
+
+	return c_total_players;
+}
+
+//Deathmatch or Team gameplay.
+stock Function_PBTeamGame()
+{
+
+	#if defined PB_TEAMGAME
+
+		return c_fakeplayer_teammate = true;
+		
+	#else
+		
+		return c_fakeplayer_teammate = false;
+		
+	#endif
+	
+}
+
+//Return preffered next buttons.
+/*stock Function_ReturnWeaponRifle(pBot)
+{
+	//Let them do their tricks.
+	if(c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_GAUSS || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_RPG)
+	{
+		return IN_FORWARD | IN_JUMP;
+	}
+
+	//Non stop moving forward.
+	else
+		return IN_FORWARD;
+}*/
+
+//Return crazy mode.
+stock Function_ReturnButton()
+{
+
+	#if defined PB_TRICK_MODE
+
+		return IN_FORWARD | IN_JUMP;		
+				
+	#else
+
+		return IN_FORWARD;
+				
+	#endif
+
+}
+
+//Return impulse.
+stock Function_ReturnImpulse(iImpulse)
+{
+
+	#if defined PB_USE_IMPULSE
+					
+		return iImpulse;
+		
+	#else
+
+		return -iImpulse;
+						
+	#endif
+
+}
+
+//Returns given weapon.
+stock Function_ReturnWeapon(pBot)
+{
+	if(get_cvar_num("apb_hl_rocket") > NULL)
+	{
+		c_fakeplayer_hl_weapon[pBot] = PB_WEAPON_RPG;
+		Function_SpawnGear(pBot, "weapon_rpg");
+	}
+
+	else
+	{	
+		//Give them randomly choosen superweapon.
+		c_fakeplayer_hl_weapon[pBot] = random_num(1, 12);
+
+		switch(c_fakeplayer_hl_weapon[pBot])
+		{
+			case 1: Function_SpawnGear(pBot, "weapon_gauss");
+			case 2: Function_SpawnGear(pBot, "weapon_9mmAR");
+			case 3: Function_SpawnGear(pBot, "weapon_snark");
+			case 4: Function_SpawnGear(pBot, "weapon_357");
+			case 5:
+			{
+				if(c_fakeplayer_ag_ffax)
+					Function_SpawnGear(pBot, "weapon_9mmAR");
+				else
+					Function_SpawnGear(pBot, "weapon_hornetgun");
+			}
+			case 6: Function_SpawnGear(pBot, "weapon_egon");
+			case 7: Function_SpawnGear(pBot, "weapon_rpg");
+			case 8: Function_SpawnGear(pBot, "weapon_handgrenade");
+			case 9: Function_SpawnGear(pBot, "weapon_shotgun");
+			case 10: Function_SpawnGear(pBot, "weapon_crossbow");
+			case 11:
+			{
+				Function_SpawnGear(pBot, "weapon_tripmine");
+				c_fakeplayer_weapon_explosion[pBot] = true;		
+			}
+			case 12: Function_SpawnGear(pBot, "weapon_satchel");				
+		}
+	}
+}
+
+//Return Counter-Strike mod.
+stock RUN_APB_GAME_COUNTERSTRIKE()
+	return c_fakeplayer_game_mod == PB_GAME_MOD_CSTRIKE || c_fakeplayer_game_mod == PB_GAME_MOD_CZERO;
+
+//Return Half-Life/Adrenaline Gamer and Deathmatch Classic mod.
+stock RUN_APB_GAME_DEATHMATCH()
+	return c_fakeplayer_game_mod == PB_GAME_MOD_HL || c_fakeplayer_game_mod == PB_GAME_MOD_DMC || c_fakeplayer_game_mod == PB_GAME_MOD_AG;
+
+//Return Half-Life and Adrenaline Gamer.
+stock RUN_APB_GAME_AGHL()
+	return c_fakeplayer_game_mod == PB_GAME_MOD_HL || c_fakeplayer_game_mod == PB_GAME_MOD_AG;
+
+//Return non tricky weapons.
+stock PB_WEAPON_RUN(pBot)
+	return c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_AR || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_SATCHEL || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_SHOTGUN || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_TRIPMINE || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_CROSSBOW || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_SNARK || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_357 || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_HORNET || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_EGON || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_HANDGRENADE;
+
+//Let them auto join.	
+stock Function_ClientSelectRole(pBot)
+{	
+	//For Counter-Strike and Condition-Zero. Half-Life spawns player by default.
+	if(RUN_APB_GAME_COUNTERSTRIKE())
+	{	
+		#define CLIENT_MENUSELECT "menuselect"	
+		#define MENUSELECT_RANDOM "5"
+		#define MENUSELECT_RANDOM_CZERO "6"		
+
+		//Set team.
+		Function_FakeClientCommand(pBot, CLIENT_MENUSELECT, MENUSELECT_RANDOM);
+		
+		//Counter-Strike check. Set class.
+		if(c_fakeplayer_game_mod == PB_GAME_MOD_CSTRIKE)		
+			Function_FakeClientCommand(pBot, CLIENT_MENUSELECT, MENUSELECT_RANDOM);
+			
+		//Condition Zero check.	
+		else			
+			Function_FakeClientCommand(pBot, CLIENT_MENUSELECT, MENUSELECT_RANDOM_CZERO);
+	}
+	
+	//Give weapon if mod is Half-Life or Adrenaline Gamer.
+	if(RUN_APB_GAME_AGHL())
+	{
+		//Give weapon.
+		Function_SetPrimaryWeapon(pBot);
+	
+		//Add bullets.
+		Function_Bullets(pBot);
+	}
+	
+	//Deathmatch Classic.
+	if(c_fakeplayer_game_mod == PB_GAME_MOD_DMC)
+		Function_FakeClientCommand(pBot, "_firstspawn");		
+	
+	new pName[32];
+	pName = Function_GetPlayerName(pBot);	
+	
+	//Show connection info.
+	client_print(NULL, print_chat, "%s connected.", pName);
+}
+
+//pBot chat.
+stock Function_FakeChat(pBot, const iMessage[])
+{
+	//pBot.
+	if(!c_fakeplayer_edict[pBot])
+		return;
+	
+	//pBot chat delay.	
+	if(c_fakeplayer_chat_delay[pBot] > get_gametime())
+		return;
+
+	new pMessage[192], iPlayerName[32];
+	iPlayerName = Function_GetPlayerName(pBot);	
+
+	//Half-Life and Adrenaline Gamer. Support for Bugfixed HL.
+	if(RUN_APB_GAME_AGHL())
+		//Bug.
+		//formatex(pMessage, charsmax(pMessage), "^x02(ALL) %s^1: %s ^n", iPlayerName, iMessage);
+		formatex(pMessage, charsmax(pMessage), "%s: %s ^n", iPlayerName, iMessage);
+
+	//Any other mod.
+	if(!RUN_APB_GAME_COUNTERSTRIKE() && !RUN_APB_GAME_AGHL())
+		formatex(pMessage, charsmax(pMessage), "%s: %s", iPlayerName, iMessage);	
+	
+	message_begin(MSG_BROADCAST, get_user_msgid("SayText"));
+	write_byte(pBot);
+	
+	//Counter-Strike.
+	if(RUN_APB_GAME_COUNTERSTRIKE())
+	{
+		write_string("#Cstrike_Chat_All");
+		write_string("");
+		write_string(iMessage);		
+	}
+	
+	//Other.
+	else
+		write_string(pMessage);
+	
+	message_end();
+}
+
+//Might be useful for Deathmatch Classic too.
+stock Function_SpawnGear(iPlayer, const pItem[])
+{
+	#define ITEM_CHARMAX 5
+	#define WEAPON_CHARMAX 7
+	#define AMMO_CHARMAX 5
+
+	//Item or weapon or ammo
+	if(!equal(pItem, "item_", ITEM_CHARMAX) && !equal(pItem, "weapon_", WEAPON_CHARMAX) && !equal(pItem, "ammo_", AMMO_CHARMAX))
+		return;	
+ 
+	//Create this.
+	new ItemEntity = engfunc(EngFunc_CreateNamedEntity, engfunc(EngFunc_AllocString, pItem));
+
+	if(!pev_valid(ItemEntity))	
+		return;
+
+	//Get now player origin.		
+	new Float: iOrigin[3];
+	pev(iPlayer, pev_origin, iOrigin);
+	
+	//Move it to player's origin.
+	set_pev(ItemEntity, pev_origin, iOrigin);
+
+	//Set flag norespawn.	
+	set_pev(ItemEntity, pev_spawnflags, SF_NORESPAWN);
+
+	//Remember this.
+	set_pev(ItemEntity, pev_iuser1, ITEM_KEY);
+
+	//Spawn
+	dllfunc(DLLFunc_Spawn, ItemEntity);
+	
+	//Saving to get it after touch.
+	new iOldSolid = pev(ItemEntity, pev_solid);
+	
+	//Calling touch.
+	dllfunc(DLLFunc_Touch, ItemEntity, iPlayer);
+	
+	//If it's still solid, remove. Not sure, how that may happen.
+	if(pev(ItemEntity, pev_solid) == iOldSolid && pev(ItemEntity, pev_iuser1) == ITEM_KEY)
+	{
+		/*new iClassname[32];
+		pev(ItemEntity, pev_classname, iClassname, charsmax(iClassname))
+
+		console_print(NULL, "Succefully removed: %s", iClassname);*/
+
+		set_pev(ItemEntity, pev_flags, FL_KILLME);
+	}				
+}
+
+//Bullets.
+stock Function_Bullets(iPlayer)
+{
+	//Safe condition
+	if(pev_valid(iPlayer) != PDATA_SAFE || !is_user_alive(iPlayer))
+		return;	
+	
+	//For Counter-Strike.
+	if(RUN_APB_GAME_COUNTERSTRIKE())
+	{
+		//M4A1
+		if(get_pdata_int(iPlayer, m_iTeam, CBASE_PLAYER) == TEAM_B)
+			set_pdata_int(iPlayer, m_rgAmmo_556, PB_SUPPLY, CBASE_PLAYER);
+			
+		//AK	
+		else
+			set_pdata_int(iPlayer, m_rgAmmo_762, PB_SUPPLY, CBASE_PLAYER);
+
+		return;
+	}
+
+	//Half-Life.
+	else if(c_fakeplayer_game_mod == PB_GAME_MOD_HL)
+	{
+		switch(c_fakeplayer_hl_weapon[iPlayer])
+		{
+			//Gauss cells for Half-Life.
+			case 1, 6:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_gauss, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}	
+			
+			//9mm AR for Half-Life.
+			case 2:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_9mmAR, PB_SUPPLY, CBASE_PLAYER);
+				set_pdata_int(iPlayer, m_rgAmmo_9mmAR_grenades, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;				
+			}
+				
+			//Snarks.
+			case 3:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_snark, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}
+
+			//357 bullets.
+			case 4:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_357, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}	
+
+			//Hornet.
+			case 5:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_hornet, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}
+
+			//RPG Rockets.
+			case 7:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_rocket, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}				
+
+			//Handgrenades.
+			case 8:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_handgrenade, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}
+
+			//Shotgun shells.
+			case 9:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_buckshot, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}
+
+			//Crossbow ammo.
+			case 10:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_crossbow, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}
+
+			//Tripmine ammo.
+			case 11:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_tripmine, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}
+
+			//Satchel ammo.
+			case 12:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_satchel, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}																			
+		}
+	}
+
+	//Adrenaline Gamer.
+	else if(c_fakeplayer_game_mod == PB_GAME_MOD_AG)
+	{
+		switch(c_fakeplayer_hl_weapon[iPlayer])
+		{
+			//Gauss cells for Adrenaline Gamer.
+			case 1, 6:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_gauss_aghl, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}	
+			
+			//9mm AR for Adrenaline Gamer.
+			case 2:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_9mmAR_aghl, PB_SUPPLY, CBASE_PLAYER);
+				set_pdata_int(iPlayer, m_rgAmmo_9mmAR_grenades_aghl, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;				
+			}
+				
+			//Snarks for Adrenaline Gamer.
+			case 3:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_snark_aghl, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}
+
+			//357 bullets  for Adrenaline Gamer.
+			case 4:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_357_aghl, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}
+
+			//Hornet for Adrenaline Gamer or Rifle for FFAX.
+			case 5:
+			{
+				if(c_fakeplayer_ag_ffax)
+					set_pdata_int(iPlayer, m_rgAmmo_9mmAR_aghl, PB_SUPPLY, CBASE_PLAYER);
+				else	
+					set_pdata_int(iPlayer, m_rgAmmo_hornet_aghl, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}
+
+			//RPG Rockets AGHL.
+			case 7:
+			{
+				set_pdata_int(iPlayer, m_rgAmmo_rocket_aghl, PB_SUPPLY, CBASE_PLAYER);
+					
+				return;
+			}			
+
+			//Handgrenades AGHL.
+			case 8:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_handgrenade_aghl, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}
+
+			//Shotgun shells AGHL.
+			case 9:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_buckshot_aghl, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}
+
+			//Crossbow ammo AGHL.
+			case 10:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_crossbow_aghl, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}
+
+			//Tripmine ammo AGHL.
+			case 11:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_tripmine_aghl, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}
+
+			//Satchel ammo AGHL.
+			case 12:
+			{
+
+				set_pdata_int(iPlayer, m_rgAmmo_satchel_aghl, PB_SUPPLY, CBASE_PLAYER);
+
+				return;
+			}																						
+		}
+	}	
+}
+
+//pBot attacking logic.
+stock Function_PlayerWeaponAction(pBot)
+{
+	//Set Ragebot buttons during fire. Game Counter-Strike.
+	if(RUN_APB_GAME_COUNTERSTRIKE())
+	{
+		if(c_fakeplayer_action[pBot])
+			c_fakeplayer_button[pBot] = IN_DUCK | IN_ATTACK;
+		else
+			c_fakeplayer_button[pBot] = IN_FORWARD | IN_ATTACK;
+								
+		//Set Ragebot next attack delay.	
+		c_fakeplayer_attack_time[pBot] = get_gametime() + random_float(FAKE_PLAYER_ATTACK_DELAY_MIN, FAKE_PLAYER_ATTACK_DELAY_MAX);
+				
+		//Set next pBot think timeout.
+		c_fakeplayer_think_time[pBot] = get_gametime() + FAKE_PLAYER_THINK_TIMER_MIN / 2;
+				
+		#if defined PB_WEAPON_MODE
+				
+			//Set next wall touch.	
+			c_fakeplayer_walltouch_time[pBot] = get_gametime() + FAKE_PLAYER_WALLTOUCH_TIMER * 10;
+					
+		#endif
+
+		//No need to continue check.	
+		return;		
+	}	
+								
+	//Game Half-Life and Adrenaline Gamer.	
+	else if(RUN_APB_GAME_AGHL())
+	{
+
+		//Weapon Rifle AR/Shotgun/Crossbow.
+		if(c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_AR || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_SHOTGUN || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_CROSSBOW)
+		{
+			new iRandom;
+			iRandom = random_num(1, 20);
+
+			switch(iRandom)
+			{
+				case 2..20: c_fakeplayer_button[pBot] = IN_FORWARD | IN_ATTACK;
+				case 1: c_fakeplayer_button[pBot] = IN_FORWARD | IN_ATTACK2;
+			}
+				
+			c_fakeplayer_attack_time[pBot] = get_gametime() + random_float(FAKE_PLAYER_ATTACK_DELAY_MIN, FAKE_PLAYER_ATTACK_DELAY_MAX);	
+		}	
+
+		else
+			c_fakeplayer_button[pBot] = IN_FORWARD | IN_ATTACK;	
+		
+		//Increase. If pBots are using Gauss and other, the time between rage loop will be increased.	
+		if(c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_GAUSS || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_TRIPMINE || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_RPG || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_SNARK || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_HORNET || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_357 || c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_HANDGRENADE)
+			c_fakeplayer_attack_time[pBot] = get_gametime() + random_float(FAKE_PLAYER_ATTACK_DELAY_MIN * 15, FAKE_PLAYER_ATTACK_DELAY_MAX * 10);
+
+		//Randomize packs.
+		else if(c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_SATCHEL)
+		{
+			new iRandom;
+			iRandom = random_num(1, 20);
+
+			switch(iRandom)
+			{
+				case 1..5: c_fakeplayer_button[pBot] = IN_FORWARD | IN_ATTACK;
+				case 6..20: c_fakeplayer_button[pBot] = IN_FORWARD | IN_ATTACK2;
+			}
+
+			c_fakeplayer_attack_time[pBot] = get_gametime() + random_float(FAKE_PLAYER_ATTACK_DELAY_MIN * 15, FAKE_PLAYER_ATTACK_DELAY_MAX * 10);
+		}	
+
+		//Gluon fastest.
+		else if(c_fakeplayer_hl_weapon[pBot] == PB_WEAPON_EGON)
+			c_fakeplayer_attack_time[pBot] = get_gametime() + 0.01;	
+		
+		c_fakeplayer_think_time[pBot] = get_gametime() + FAKE_PLAYER_THINK_TIMER_MIN / 2;	
+		
+		return;								
+	}
+
+	//Deathmatch Classic.
+	else if(c_fakeplayer_game_mod == PB_GAME_MOD_DMC)
+	{
+		c_fakeplayer_button[pBot] = IN_FORWARD | IN_ATTACK;
+
+		c_fakeplayer_attack_time[pBot] = get_gametime() + random_float(FAKE_PLAYER_ATTACK_DELAY_MIN * 15, FAKE_PLAYER_ATTACK_DELAY_MAX * 10);				
+		c_fakeplayer_think_time[pBot] = get_gametime() + FAKE_PLAYER_THINK_TIMER_MIN / 2;		
+
+		return;
+	}
+}
+
+//Check classnames.
+stock Function_SetupRemovables(const iClassname[])
+{
+	//Gibs, spawning non stop during player death, large amount of this
+	if(equal(iClassname, "gib"))
+	{
+		c_max_gibs ++;
+		
+		if(c_max_gibs > MAX_GIB_LIMIT - 1)
+		{
+			for(new iGibs = NULL; iGibs < MAX_GIB_LIMIT - 1; iGibs ++)
+				Function_SetGamedllThink("gib");		
+
+			c_max_gibs = NULL;
+		}	
+	}			
+
+	//Weaponboxes. Remove weapon entities also.
+	else if(equal(iClassname, "weaponbox"))
+		Function_SetGamedllThink("weaponbox");	
+}
+
+//Touching wall.
+stock AEROBOT_TOUCH_WALL(pBot)
+	return c_fakeplayer_walltouch[pBot] && c_fakeplayer_attack_time[pBot] < get_gametime();
+
+//Shooting.
+stock AEROBOT_IN_ATTACK(pBot)
+	return c_fakeplayer_attack_time[pBot] > get_gametime() && c_fakeplayer_attacking[pBot];
+
+//Current action.
+stock AEROBOT_CURRENT_THINK(pBot)
+	return c_fakeplayer_think_time[pBot] > get_gametime() && c_fakeplayer_attack_time[pBot] < get_gametime();
+
+//Next random action.
+stock AEROBOT_RANDOM_THINK(pBot)
+	return c_fakeplayer_think_time[pBot] < get_gametime() && c_fakeplayer_attack_time[pBot] < get_gametime();
+
+//Set protection
+stock SetProtection(iPlayer)
+{
+	set_pev(iPlayer, pev_takedamage, DAMAGE_NO);
+
+	SetRendering(iPlayer, kRenderFxNone, NULL, NULL, NULL, kRenderTransAdd, 150);
+	
+	remove_task(iPlayer + PB_PROTECTION);
+	set_task(PB_PROTECTION_TIMER, "Task_RemoveProtection", iPlayer + PB_PROTECTION);
+}
+
+//RenderFx
+stock SetRendering(iEntity, iFx = kRenderFxNone, r = 255, g = 255, b = 255, iRender = kRenderNormal, iAmount = 16)
+{	
+	static Float: iColor[3];
+	iColor[0] = float(r);
+	iColor[1] = float(g);
+	iColor[2] = float(b);
+
+	set_pev(iEntity, pev_renderfx, iFx);
+	set_pev(iEntity, pev_rendercolor, iColor);
+	set_pev(iEntity, pev_rendermode, iRender);
+	set_pev(iEntity, pev_renderamt, float(iAmount));
+}
+
+//Remove weaponbox and some gibs.
+stock Function_SetGamedllThink(const iClassname[])
+{
+	new iEntity = NULLENT;
+
+	while((iEntity = engfunc(EngFunc_FindEntityByString, iEntity, "classname", iClassname)) > NULL)		
+		dllfunc(DLLFunc_Think, iEntity);
+}
+
+//Add additional delay.
+stock Function_SetupDifficulty(pBot)
+{
+	//Max difficulty.
+	if(get_cvar_num("apb_difficulty") > PB_MAX_DIFF - 1)
+		c_fakeplayer_reaction_time[pBot] = get_gametime() + PB_MAX_DIFF_ACTION_TIME;
+
+	//Average difficulty.
+	else if(get_cvar_num("apb_difficulty") == PB_AVERAGE_DIFF)
+		c_fakeplayer_reaction_time[pBot] = get_gametime() + PB_AVERAGE_DIFF_ACTION_TIME;
+
+	//Medium difficulty.
+	else if(get_cvar_num("apb_difficulty") == PB_MEDIUM_DIFF)
+		c_fakeplayer_reaction_time[pBot] = get_gametime() + PB_MEDIUM_DIFF_ACTION_TIME;	
+
+	//low difficulty.
+	else if(get_cvar_num("apb_difficulty") < PB_LOW_DIFF + 1)
+		c_fakeplayer_reaction_time[pBot] = get_gametime() + PB_LOW_DIFF_ACTION_TIME;				
+}
+
+//Force unstuck at spawn.
+stock UnstuckPlayer(iPlayer, i_StartDistance, i_MaxAttempts)
+{
+	#define SKIP_IGNORE -1
+
+	enum Coord_e 
+	{ 
+		Float: x, 
+		Float: y, 
+		Float: z 
+	}
+
+	#define GetPlayerHullSize ((pev(iPlayer, pev_flags) & FL_DUCKING) ? HULL_HEAD : HULL_HUMAN)	
+	#define MAX_DISTANCE 1000
+	
+	//Not alive, ignore.
+	if(!is_user_alive(iPlayer))  
+		return SKIP_IGNORE;
+        
+	static Float: vf_OriginalOrigin[Coord_e], Float: vf_NewOrigin[Coord_e];
+	static i_Attempts, i_Distance;
+        
+	//Get the current player's origin.
+	pev(iPlayer, pev_origin, vf_OriginalOrigin);
+        
+	i_Distance = i_StartDistance;
+        
+	while(i_Distance < MAX_DISTANCE)
+	{
+		i_Attempts = i_MaxAttempts;
+            
+		while(i_Attempts --)
+		{
+			vf_NewOrigin[x] = random_float(vf_OriginalOrigin[x] - i_Distance, vf_OriginalOrigin[x] + i_Distance);
+			vf_NewOrigin[y] = random_float(vf_OriginalOrigin[y] - i_Distance, vf_OriginalOrigin[y] + i_Distance);
+			vf_NewOrigin[z] = random_float(vf_OriginalOrigin[z] - i_Distance, vf_OriginalOrigin[z] + i_Distance);
+            
+			engfunc(EngFunc_TraceHull, vf_NewOrigin, vf_NewOrigin, DONT_IGNORE_MONSTERS, GetPlayerHullSize, iPlayer, NULL);
+            
+			//Free space found.
+			if(get_tr2(NULL, TR_InOpen) && !get_tr2(NULL, TR_AllSolid) && !get_tr2(NULL, TR_StartSolid))
+			{
+				//Set the new origin.
+				engfunc(EngFunc_SetOrigin, iPlayer, vf_NewOrigin);
+				
+				return TRUE;
+			}
+		}
+            
+		i_Distance += i_StartDistance;
+	}
+        
+	//Could not be found.
+	return FALSE;
+}
+
+//Reset think states for new connected pBot.
+stock Function_FakePlayerCondition(pBot)
+{
+	//Set pause to not instantly think right after spawn.
+	c_fakeplayer_think_time[pBot] = get_gametime() + random_float(FAKE_PLAYER_THINK_TIMER_MIN, FAKE_PLAYER_THINK_TIMER_MAX);
+	
+	//Set pause to attack.
+	c_fakeplayer_attack_time[pBot] = get_gametime() + random_float(FAKE_PLAYER_ATTACK_DELAY_MIN, FAKE_PLAYER_ATTACK_DELAY_MAX);
+	
+	//Reset wall touch timer.
+	c_fakeplayer_walltouch_time[pBot] = get_gametime() + FAKE_PLAYER_WALLTOUCH_TIMER * 10;
+
+	//Reset RunPlayerMove command.
+	c_fakeplayer_button[pBot] = NULL;
+
+	//Set action.
+	c_fakeplayer_action[pBot] = true;
+
+	//Can trick move.
+	c_fakeplayer_trick_move[pBot] = true;	
+	
+	//Can switch back to primary.
+	c_fakeplayer_weapon[pBot] = true;
+
+	//Does not ignores enemy.
+	c_fakeplayer_weapon_explosion[pBot] = false;	
+	
+	//Reset button state.
+	c_fakeplayer_attacking[pBot] = false;
+	
+	//Not crouching.
+	c_fakeplayer_crouch[pBot] = false;
+	
+	//Not touching wall.
+	c_fakeplayer_walltouch[pBot] = false;
+	
+	//Set max speed
+	if(RUN_APB_GAME_DEATHMATCH())
+	{
+		c_fakeplayer_forward_speed[pBot] = MAX_MOVE_SPEED;
+		c_fakeplayer_side_speed[pBot] = MAX_MOVE_SPEED;
+	}	
+
+	//Bind value
+	c_fakeplayer_edict[pBot] = true;
+}
+
+//https://github.com/rtxa/HL-Stocks/blob/master/hlstocks.inc
+#define HL_MAX_TEAMS 10
+#define HL_MAX_TEAMNAME_LENGTH 16
+#define HL_MAX_TEAMLIST_LENGTH 512
+
+stock static teams[HL_MAX_TEAMS][HL_MAX_TEAMNAME_LENGTH];
+
+stock hl_get_user_model(client, model[], len)
+	get_user_info(client, "model", model, len);
+
+stock hl_get_user_team(client, team[] = "", len = NULL)
+{
+	if(hl_get_user_spectator(client))
+		return NULL;
+
+	static Float: tdm;
+
+	global_get(glb_teamplay, tdm);
+
+	if(tdm < 1.0) 
+		return NULL;
+
+	if(!len) 
+		len = HL_MAX_TEAMNAME_LENGTH;
+
+	hl_get_user_model(client, team, len);
+
+	return __get_team_index(team);
+}
+
+stock bool: hl_get_user_spectator(client)
+{
+	if(pev(client, pev_iuser1) || pev(client, pev_iuser2))
+		return true;
+
+	return false;
+}
+
+stock __get_team_index(const team[])
+{
+	static teamid, valid, i;
+	teamid = NULL;
+	valid = NULL;
+	i = NULL;
+
+	__count_teams();
+
+	for(i = 0; i < sizeof(teams); i ++)
+	{
+		teamid++;
+
+		if(equali(teams[i][0], team))
+		{
+			valid = 1;
+			break;
+		}
+	}
+
+	if(valid)
+		return teamid;
+
+	return NULL;
+}
+
+stock __count_teams()
+{
+	if(!teams[0][0])
+	{
+		new teamlist[HL_MAX_TEAMLIST_LENGTH];
+
+		get_cvar_string("mp_teamlist", teamlist, charsmax(teamlist));
+		__explode_teamlist(teams, charsmax(teams[]), teamlist, ';');
+	}
+
+	static teamcount;
+
+	if(!teamcount)
+	{
+		for(new i = 0; i < sizeof(teams); i ++)
+		{
+			if(teams[i][0])
+				teamcount ++;
+		}
+	}
+
+	return teamcount;
+}
+
+stock __explode_teamlist(output[][], size, input[], delimiter)
+{
+	new nLen, teamname[HL_MAX_TEAMLIST_LENGTH], numTeams;
+
+	while(nLen < strlen(input) && numTeams < HL_MAX_TEAMS)
+	{
+		strtok(input[nLen], teamname, charsmax(teamname), "", NULL, delimiter);
+
+		nLen += strlen(teamname) + 1;
+
+		if(__get_team_index__(teamname, output, numTeams) < NULL)
+		{
+			copy(output[numTeams], size, teamname);
+
+			numTeams ++;
+		}
+	}
+}
+
+stock __get_team_index__(const teamname[], team_names[][], numTeams)
+{
+	for(new i = 0; i < numTeams; i ++)
+	{	
+		if(equali(team_names[i], teamname))
+			return i;
+	}
+		
+	return -1;
+}

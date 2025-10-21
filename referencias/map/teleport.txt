@@ -1,0 +1,77 @@
+#include <amxmodx>
+#include <fun>
+#include <engine>
+
+#define PLUGIN "Teleport Menu"
+#define VERSION "1.0"
+#define AUTHOR "Pukovnik (Uzviseni bog)"
+
+new g_playerMenu[33]
+
+public plugin_init() {
+    register_plugin(PLUGIN, VERSION, AUTHOR)
+    register_clcmd("say /teleport", "ShowTeleportMenu")
+    register_clcmd("say_team /teleport", "ShowTeleportMenu")
+    register_clcmd("say /tp", "ShowTeleportMenu")
+    register_clcmd("say_team /tp", "ShowTeleportMenu")
+}
+
+public ShowTeleportMenu(id) {
+	
+    if (!(get_user_flags(id) & ADMIN_BAN)) {
+        client_print(id, print_chat, "[Teleport] Only administrators can use this command -_-")
+        return PLUGIN_HANDLED
+    }
+
+    if (!is_user_alive(id)) {
+        client_print(id, print_chat, "[Teleport] You must be alive to use teleport.")
+        return PLUGIN_HANDLED
+    }
+
+    new menu = menu_create("Teleport to player:", "TeleportMenuHandler")
+    new players[32], num, pname[32]
+    get_players(players, num, "a")
+
+    for (new i = 0; i < num; i++) {
+        if (players[i] == id) continue
+        get_user_name(players[i], pname, charsmax(pname))
+        menu_additem(menu, pname, fmt("%d", players[i]))
+    }
+
+    if (menu_items(menu) == 0) {
+        client_print(id, print_chat, "[Teleport] There are no other alive players.")
+        menu_destroy(menu)
+        return PLUGIN_HANDLED
+    }
+
+    menu_display(id, menu)
+    g_playerMenu[id] = menu
+    return PLUGIN_HANDLED
+}
+
+public TeleportMenuHandler(id, menu, item) {
+    if (item == MENU_EXIT) {
+        menu_destroy(menu)
+        return PLUGIN_HANDLED
+    }
+
+    new data[6], name[32], access, callback
+    menu_item_getinfo(menu, item, access, data, charsmax(data), name, charsmax(name), callback)
+    new target = str_to_num(data)
+
+    if (!is_user_alive(target)) {
+        client_print(id, print_chat, "[Teleport] The player is no longer alive.")
+        menu_destroy(menu)
+        return PLUGIN_HANDLED
+    }
+
+    new origin[3]
+    get_user_origin(target, origin)
+    origin[2] += 60
+    set_user_origin(id, origin)
+
+    client_print(id, print_chat, "[Teleport] You have been teleported to the player %s.", name)
+
+    menu_destroy(menu)
+    return PLUGIN_HANDLED
+}

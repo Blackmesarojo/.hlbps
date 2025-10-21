@@ -1,0 +1,237 @@
+#include <amxmodx>
+#include <amxmisc>
+#include <fakemeta>
+#include <engine>
+
+#define ACCESS ADMIN_LEVEL_D
+#define MAX_OWNER_BOTS 2
+#define PROFILE_COUNT 11
+
+new const profiles[PROFILE_COUNT][] = {
+    "Yinlin",
+    "Changli",
+    "Nami",
+    "rgrunt",
+    "mc_steve",
+    "Kuklai",
+    "Azurlane",
+    "Hancock",
+    "Jeanne",
+    "Penguin_v2",
+    "Sieni"
+};
+
+// --- VARIABLES GLOBALES ---
+new botindex[33][MAX_OWNER_BOTS];
+new ownerBotCount[33];
+new botowner[33];
+new g_total_bots;
+new bool:g_bots_are_following[33];
+
+// --- INCLUIR MÓDULOS ---
+#include "mmaxbot/mmaxbot_control.sma"
+#include "mmaxbot/mmaxbot_ai.sma"
+
+
+// --- FUNCIONES DE UTILIDAD (VECTORES) ---
+stock vector_add(const Float:v1[3], const Float:v2[3], Float:result[3]) {
+    result[0] = v1[0] + v2[0];
+    result[1] = v1[1] + v2[1];
+    result[2] = v1[2] + v2[2];
+}
+stock vector_subtract(const Float:v1[3], const Float:v2[3], Float:result[3]) {
+    result[0] = v1[0] - v2[0];
+    result[1] = v1[1] - v2[1];
+    result[2] = v1[2] - v2[2];
+}
+stock vector_copy(const Float:source[3], Float:dest[3]) {
+    dest[0] = source[0];
+    dest[1] = source[1];
+    dest[2] = source[2];
+}
+
+// --- PRECACHE DE MODELOS ---
+public plugin_precache() {
+    for (new i = 0; i < PROFILE_COUNT; i++) {
+        new model_path[128];
+        formatex(model_path, charsmax(model_path), "models/player/%s/%s.mdl", profiles[i], profiles[i]);
+        precache_model(model_path);
+    }
+    precache_model("models/player.mdl");
+}
+
+// --- INICIALIZACIÓN DEL PLUGIN ---
+public plugin_init() {
+    register_plugin("MMod Bot Co-op", "10.2 Follow Toggle", "Gemini");
+    register_clcmd("amx_botadd", "cmd_makebot", ACCESS);
+    register_clcmd("amx_botdel", "removebots", ACCESS);
+    register_clcmd("amx_botcontrol", "cmd_bot_control", ACCESS);
+    register_clcmd("amx_botfollow", "cmd_bot_follow", ACCESS); // <-- AÑADE ESTA LÍNEA
+    set_task(0.1, "bot_movement_think", _, _, _, "b");
+    register_forward(FM_PlayerPostThink, "bot_aim_think");
+    
+    register_event("DeathMsg", "event_player_death", "a");
+}
+
+// --- GESTIÓN DE BOTS Y FORWARDS ---
+stock add_bot_count() {
+    if (g_total_bots == 0) {
+        register_control_forwards();
+    }
+    g_total_bots++;
+}
+stock remove_bot_count() {
+    g_total_bots--;
+    if (g_total_bots == 0) {
+        unregister_control_forwards();
+    }
+}
+
+// --- CREACIÓN DE BOTS ---
+public cmd_makebot(id, level, cid) {
+    if (!cmd_access(id, level, cid, 1)) return PLUGIN_HANDLED;
+    if (ownerBotCount[id] >= MAX_OWNER_BOTS) {
+        client_print(id, print_chat, "[MMod Bot] Ya tienes %d bots.", MAX_OWNER_BOTS);
+        return PLUGIN_HANDLED;
+    }
+
+    new name[32];
+    new bool:is_name_used;
+    new tries = 0;
+    do {
+        is_name_used = false;
+        new idx = random_num(0, PROFILE_COUNT - 1);
+        copy(name, charsmax(name), profiles[idx]);
+        for (new i = 1; i <= get_maxplayers(); i++) {
+            if (!is_user_connected(i)) continue;
+            new player_name[32];
+            get_user_name(i, player_name, charsmax(player_name));
+            if (equali(player_name, name)) {
+                is_name_used = true;
+                break;
+            }
+        }
+        tries++;
+        if (tries > PROFILE_COUNT * 2) {
+            client_print(id, print_chat, "[MMod Bot] No se encontraron perfiles disponibles.");
+            return PLUGIN_HANDLED;
+        }
+    } while (is_name_used);
+
+    new bot = engfunc(EngFunc_CreateFakeClient, name);
+    if (!bot) {
+        client_print(id, print_chat, "[MMod Bot] No se pudo crear el bot.");
+        return PLUGIN_HANDLED;
+    }
+    
+    engfunc(EngFunc_FreeEntPrivateData, bot);
+    set_bot_info(bot, name);
+    
+    update_patrol_angles(bot);
+
+    static szRejectReason[128];
+    dllfunc(DLLFunc_ClientConnect, bot, name, "127.0.0.1", szRejectReason);
+    if (!is_user_connected(bot)) {
+        client_print(id, print_chat, "[MMod Bot] Conexion rechazada: %s", szRejectReason);
+        return PLUGIN_HANDLED;
+    }
+
+    dllfunc(DLLFunc_ClientPutInServer, bot);
+    
+    botindex[id][ownerBotCount[id]] = bot;
+    botowner[bot] = id;
+    ownerBotCount[id]++;
+    
+    add_bot_count();
+    client_print(id, print_chat, "[MMod Bot] Bot %s creado.", name);
+    
+    set_task(0.1, "force_initial_move", bot);
+
+    return PLUGIN_HANDLED;
+}
+
+// --- FUNCIONES ORIGINALES ---
+public force_initial_move(bot) {
+    if (!is_user_connected(bot) || !is_user_alive(bot)) return;
+    engfunc(EngFunc_RunPlayerMove, bot, g_bot_angles[bot], 0.0, 0.0, 0.0, 0, 0, 100);
+}
+
+public removebots(id, level, cid) {
+    if (!cmd_access(id, level, cid, 1)) return PLUGIN_HANDLED;
+    for (new i = 0; i < ownerBotCount[id]; i++) {
+        new bot = botindex[id][i];
+        if (is_user_connected(bot)) {
+            botowner[bot] = 0;
+            server_cmd("kick #%d", get_user_userid(bot));
+            remove_bot_count();
+        }
+        botindex[id][i] = 0;
+    }
+    ownerBotCount[id] = 0;
+    client_print(id, print_chat, "[MMod Bot] Todos tus bots han sido eliminados.");
+    return PLUGIN_HANDLED;
+}
+
+// --- LÓGICA DE REAPARICIÓN FINAL ---
+
+// CORRECCIÓN DE ORDEN: Esta función ahora va PRIMERO para evitar errores de compilación.
+public respawn_bot(bot_id) {
+    if (is_user_connected(bot_id) && !is_user_alive(bot_id)) {
+        // Simula el "clic" (IN_ATTACK) que un jugador haría para reaparecer.
+        engfunc(EngFunc_RunPlayerMove, bot_id, {0.0,0.0,0.0}, 0.0, 0.0, 0.0, IN_ATTACK, 0, 1);
+    }
+}
+
+public event_player_death() {
+    new victim_id = read_data(2);
+    if (botowner[victim_id] > 0) {
+        // CORRECCIÓN: Se llama directamente a respawn_bot para una reaparición instantánea.
+        respawn_bot(victim_id);
+    }
+}
+// --- FIN DE LÓGICA DE REAPARICIÓN ---
+
+public refresh_bot_model(bot) {
+    if (!is_user_connected(bot)) return;
+    new name[32];
+    get_user_info(bot, "model", name, charsmax(name));
+    engfunc(EngFunc_SetClientKeyValue, bot, engfunc(EngFunc_GetInfoKeyBuffer, bot), "model", name);
+    dllfunc(DLLFunc_Think, bot);
+    set_pev(bot, pev_effects, pev(bot, pev_effects) & ~EF_NODRAW);
+}
+
+stock set_bot_info(id, const name[]) {
+    set_user_info(id, "*bot", "1");
+    set_user_info(id, "name", name);
+    set_user_info(id, "model", name);
+    set_pev(id, pev_spawnflags, pev(id, pev_spawnflags) | FL_FAKECLIENT);
+    set_pev(id, pev_flags, pev(id, pev_flags) | FL_FAKECLIENT);
+    set_pev(id, pev_effects, pev(id, pev_effects) | EF_NODRAW);
+    set_pev(id, pev_takedamage, DAMAGE_AIM);
+    set_pev(id, pev_solid, SOLID_SLIDEBOX);
+    set_pev(id, pev_movetype, MOVETYPE_WALK);
+    set_pev(id, pev_health, 100.0);
+    engfunc(EngFunc_SetClientKeyValue, id, engfunc(EngFunc_GetInfoKeyBuffer, id), "model", name);
+    engfunc(EngFunc_SetClientKeyValue, id, engfunc(EngFunc_GetInfoKeyBuffer, id), "name", name);
+    
+    set_task(0.1, "refresh_bot_model", id);
+}
+
+// --- FUNCIÓN PARA EL COMANDO DE SEGUIMIENTO ---
+public cmd_bot_follow(id) {
+    if (ownerBotCount[id] == 0) {
+        client_print(id, print_chat, "[MMod Bot] No tienes bots para darles órdenes.");
+        return PLUGIN_HANDLED;
+    }
+    
+    // Invierte el estado actual (si estaba activado, lo desactiva, y viceversa)
+    g_bots_are_following[id] = !g_bots_are_following[id];
+
+    if (g_bots_are_following[id]) {
+        client_print(id, print_chat, "[MMod Bot] Modo seguimiento ACTIVADO. Tus bots te seguirán.");
+    } else {
+        client_print(id, print_chat, "[MMod Bot] Modo seguimiento DESACTIVADO. Tus bots volverán a su IA de patrulla.");
+    }
+
+    return PLUGIN_HANDLED;
+}

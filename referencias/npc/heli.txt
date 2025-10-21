@@ -1,0 +1,438 @@
+#include <amxmodx>
+#include <engine>
+#include <fakemeta>
+#include <amxmisc>
+#include <hamsandwich>
+
+// --- Definiciones del NPC --- //
+#define NPC_CLASSNAME "npc_helicoptero"
+#define NPC_MODEL "models/helicoptero/SMP3.mdl"
+
+// --- Definiciones del Proyectil --- //
+#define BULLET_CLASSNAME "npc_bullet"
+#define BULLET_MODEL "models/helicoptero/bullet.mdl"
+#define BULLET_SPEED 800.0
+
+// --- Opciones de la IA --- //
+#define OWNER_NAME "Blackmesarojo"
+#define HELICOPTER_SPEED 250.0
+#define FOLLOW_DISTANCE 200.0
+#define ATTACK_DISTANCE 800.0
+#define FIRE_RATE 0.2
+#define BULLET_DAMAGE 8.0
+#define LEASH_DISTANCE 500.0
+#define MAX_HELICOPTERS 2 // NUEVO: Límite máximo de helicópteros
+
+// --- Sonidos --- //
+#define ROTOR_SOUND "apache/ap_rotor4.wav"
+new const FIRE_SOUNDS[][] = {
+	"weapons/saw_fire1.wav",
+	"weapons/saw_fire2.wav",
+	"weapons/saw_fire3.wav"
+};
+
+// --- Variables Globales --- //
+new g_iHelicopter;
+new g_iTarget;
+new g_iEnemyTarget;
+new bool:g_bOwnerHasDied;
+new Float:g_flNextAttackTime;
+new Float:g_flNextLeashCheckTime;
+new g_iHelicopterCount = 0; // NUEVO: Contador de helicópteros activos.
+
+public plugin_init()
+{
+	register_plugin("NPC Helicoptero de Equipo", "5.0 FINAL", "Gemini"); // Versión final
+	register_clcmd("amx_heliadd", "CmdSpawnHelicoptero", ADMIN_RCON, "Crea un helicoptero NPC de apoyo."); // Comando renombrado
+	register_clcmd("amx_helidel", "CmdRemoveHelicopters", ADMIN_RCON, "Elimina todos los helicopteros activos."); // NUEVO: Comando de eliminación
+	register_think(NPC_CLASSNAME, "NpcThink");
+	
+	register_touch(BULLET_CLASSNAME, "*", "fw_BulletTouch");
+}
+
+public plugin_precache()
+{
+	precache_model(NPC_MODEL);
+	precache_model(BULLET_MODEL);
+	
+	precache_sound(ROTOR_SOUND);
+	for (new i = 0; i < sizeof(FIRE_SOUNDS); i++)
+	{
+		precache_sound(FIRE_SOUNDS[i]);
+	}
+}
+
+// --- NUEVA FUNCIÓN PARA ELIMINAR HELICÓPTEROS ---
+public CmdRemoveHelicopters(id, level, cid)
+{
+	if (!cmd_access(id, level, cid, 1)) {
+		return PLUGIN_HANDLED;
+	}
+
+	new iHeli = -1;
+	new count = 0;
+	while ((iHeli = find_ent_by_class(iHeli, NPC_CLASSNAME)) != 0)
+	{
+		emit_sound(iHeli, CHAN_STATIC, "common/null.wav", 0.0, 0.0, SND_STOP, 0);
+		remove_entity(iHeli);
+		count++;
+	}
+	
+	g_iHelicopterCount = 0;
+	client_print(id, print_chat, "[NPC] Se han eliminado %d helicópteros.", count);
+	return PLUGIN_HANDLED;
+}
+
+public task_remove_entity(iEnt)
+{
+	if (is_valid_ent(iEnt))
+	{
+		remove_entity(iEnt);
+	}
+}
+
+public CmdSpawnHelicoptero(id, level, cid)
+{
+	if (!cmd_access(id, level, cid, 1)) {
+		return PLUGIN_HANDLED;
+	}
+
+	// AÑADIDO: Comprobar el límite de helicópteros
+	if (g_iHelicopterCount >= MAX_HELICOPTERS)
+	{
+		client_print(id, print_chat, "[NPC] Límite de %d helicópteros alcanzado. Usa amx_helidel para eliminarlos.", MAX_HELICOPTERS);
+		return PLUGIN_HANDLED;
+	}
+
+	// MODIFICADO: Ahora crea una nueva entidad sin eliminar la anterior
+	g_iHelicopter = create_entity("info_target");
+	
+	new Float:vOrigin[3];
+	entity_get_vector(id, EV_VEC_origin, vOrigin);
+	vOrigin[2] += 75.0;
+	entity_set_origin(g_iHelicopter, vOrigin);
+	
+	entity_set_string(g_iHelicopter, EV_SZ_classname, NPC_CLASSNAME);
+	entity_set_model(g_iHelicopter, NPC_MODEL);
+	entity_set_float(g_iHelicopter, EV_FL_takedamage, 0.0);
+	entity_set_int(g_iHelicopter, EV_INT_solid, SOLID_NOT);
+	entity_set_int(g_iHelicopter, EV_INT_movetype, MOVETYPE_NOCLIP);
+	
+	new Float:vMins[3] = {-32.0, -32.0, 0.0};
+	new Float:vMaxs[3] = {32.0, 32.0, 64.0};
+	entity_set_size(g_iHelicopter, vMins, vMaxs);
+	
+	g_bOwnerHasDied = false;
+	g_iTarget = find_player_by_name(OWNER_NAME);
+	if (!is_user_alive(g_iTarget)) {
+		g_iTarget = FindClosestPlayer(g_iHelicopter);
+	}
+	
+	g_iEnemyTarget = 0;
+	g_flNextAttackTime = 0.0;
+	g_flNextLeashCheckTime = get_gametime() + 10.0;
+	
+	entity_set_float(g_iHelicopter, EV_FL_nextthink, get_gametime() + 0.1);
+	
+	emit_sound(g_iHelicopter, CHAN_STATIC, ROTOR_SOUND, 0.1, ATTN_NORM, 0, PITCH_NORM);
+	
+	g_iHelicopterCount++; // AÑADIDO: Incrementar el contador
+	client_print(id, print_chat, "[NPC] Helicóptero de apoyo desplegado (%d/%d).", g_iHelicopterCount, MAX_HELICOPTERS);
+	return PLUGIN_HANDLED;
+}
+
+public NpcThink(iEnt)
+{
+	if (!is_valid_ent(iEnt)) {
+		g_iHelicopterCount--; // MODIFICADO: Decrementar si la entidad se vuelve inválida
+		return;
+	}
+	
+	if (get_gametime() >= g_flNextLeashCheckTime)
+	{
+		if (is_valid_ent(g_iEnemyTarget))
+		{
+			new Float:vHeliOrigin[3], Float:vOwnerOrigin[3];
+			pev(iEnt, pev_origin, vHeliOrigin);
+			pev(g_iTarget, pev_origin, vOwnerOrigin);
+			
+			if (get_distance_f(vHeliOrigin, vOwnerOrigin) > LEASH_DISTANCE)
+			{
+				g_iEnemyTarget = 0;
+			}
+		}
+		
+		g_flNextLeashCheckTime = get_gametime() + 10.0;
+	}
+		
+	if (!is_valid_ent(g_iEnemyTarget) || pev(g_iEnemyTarget, pev_deadflag) != DEAD_NO) {
+		g_iEnemyTarget = FindBestEnemyTarget(iEnt);
+	}
+
+	if (is_valid_ent(g_iEnemyTarget))
+	{
+		AimAtTarget(iEnt, g_iEnemyTarget);
+
+		new Float:vStop[3] = {0.0, 0.0, 0.0};
+		entity_set_vector(iEnt, EV_VEC_velocity, vStop);
+		
+		if (IsLineOfSightClear(iEnt, g_iEnemyTarget))
+		{
+			if (get_gametime() >= g_flNextAttackTime)
+			{
+				FireBullet(iEnt, g_iEnemyTarget);
+				g_flNextAttackTime = get_gametime() + FIRE_RATE;
+			}
+		}
+		else
+		{
+			g_iEnemyTarget = 0;
+		}
+	}
+	else
+	{
+		if (!is_user_alive(g_iTarget))
+		{
+			new owner_id = find_player_by_name(OWNER_NAME);
+			if (!is_user_alive(owner_id)) {
+				g_bOwnerHasDied = true;
+			}
+
+			if (g_bOwnerHasDied) {
+				g_iTarget = FindClosestPlayer(iEnt);
+			} else {
+				if (is_user_alive(owner_id)) {
+					g_iTarget = owner_id;
+				} else {
+					g_iTarget = FindClosestPlayer(iEnt);
+				}
+			}
+		}
+
+		if (is_user_alive(g_iTarget)) {
+			HookEntityToTarget(iEnt, g_iTarget);
+		} else {
+			new Float:vStop[3] = {0.0, 0.0, 0.0};
+			entity_set_vector(iEnt, EV_VEC_velocity, vStop);
+		}
+	}
+
+	entity_set_float(iEnt, EV_FL_nextthink, get_gametime() + 0.1);
+}
+
+stock FireBullet(iShooter, iTarget)
+{
+	new iRand = random_num(0, sizeof(FIRE_SOUNDS) - 1);
+	emit_sound(iShooter, CHAN_WEAPON, FIRE_SOUNDS[iRand], VOL_NORM, ATTN_NORM, 0, PITCH_NORM);
+
+	new iBullet = create_entity("info_target");
+
+	entity_set_string(iBullet, EV_SZ_classname, BULLET_CLASSNAME);
+	entity_set_model(iBullet, BULLET_MODEL);
+
+	new Float:vOrigin[3], Float:vAngles[3], Float:vForward[3], Float:vVelocity[3];
+	pev(iShooter, pev_origin, vOrigin);
+	pev(iShooter, pev_v_angle, vAngles);
+	
+	engfunc(EngFunc_MakeVectors, vAngles);
+	global_get(glb_v_forward, vForward);
+
+	new Float:vSpawnOrigin[3];
+	vSpawnOrigin[0] = vOrigin[0] + vForward[0] * 50.0;
+	vSpawnOrigin[1] = vOrigin[1] + vForward[1] * 50.0;
+	vSpawnOrigin[2] = vOrigin[2] + vForward[2] * 50.0;
+	
+	entity_set_origin(iBullet, vSpawnOrigin);
+	
+	vAngles[1] += 90.0;
+	entity_set_vector(iBullet, EV_VEC_angles, vAngles);
+	
+	entity_set_int(iBullet, EV_INT_solid, SOLID_BBOX);
+	entity_set_int(iBullet, EV_INT_movetype, MOVETYPE_FLY);
+
+	new Float:vMins[3] = {-1.0, -1.0, -1.0};
+	new Float:vMaxs[3] = {1.0, 1.0, 1.0};
+	entity_set_size(iBullet, vMins, vMaxs);
+
+	entity_set_edict(iBullet, EV_ENT_owner, iShooter);
+	
+	vVelocity[0] = vForward[0] * BULLET_SPEED;
+	vVelocity[1] = vForward[1] * BULLET_SPEED;
+	vVelocity[2] = vForward[2] * BULLET_SPEED;
+	entity_set_vector(iBullet, EV_VEC_velocity, vVelocity);
+	
+	set_task(2.0, "task_remove_entity", iBullet);
+}
+
+public fw_BulletTouch(iBullet, iTouched)
+{
+	if (!is_valid_ent(iBullet) || !is_valid_ent(iTouched)) {
+		return;
+	}
+	
+	new iAttacker = pev(iBullet, pev_owner);
+	
+	if (iTouched == iAttacker) {
+		return;
+	}
+
+	new szClassname[32];
+	pev(iTouched, pev_classname, szClassname, charsmax(szClassname));
+
+	if (containi(szClassname, "monster_") != -1)
+	{
+		ExecuteHam(Ham_TakeDamage, iTouched, iBullet, iAttacker, BULLET_DAMAGE, DMG_BULLET);
+	}
+	
+	task_remove_entity(iBullet);
+}
+
+// --- VERSIÓN FINAL DE LA FUNCIÓN DE APUNTADO ---
+stock AimAtTarget(iEnt, iTarget)
+{
+	new Float:vecEntOrigin[3], Float:vecTargetOrigin[3];
+	pev(iEnt, pev_origin, vecEntOrigin);
+	pev(iTarget, pev_origin, vecTargetOrigin);
+	
+	new Float:target_mins[3], Float:target_maxs[3];
+	pev(iTarget, pev_mins, target_mins);
+	pev(iTarget, pev_maxs, target_maxs);
+	vecTargetOrigin[2] += (target_mins[2] + target_maxs[2]) * 0.5;
+
+	new Float:vecToTarget[3], Float:aimAngles[3];
+	vector_subtract(vecTargetOrigin, vecEntOrigin, vecToTarget);
+	vector_to_angle(vecToTarget, aimAngles);
+	
+	aimAngles[0] *= -1.0;
+	entity_set_vector(iEnt, EV_VEC_v_angle, aimAngles);
+	
+	new Float:bodyAngles[3];
+	bodyAngles[0] = 0.0;
+	bodyAngles[1] = aimAngles[1];
+	bodyAngles[2] = 0.0;
+	entity_set_vector(iEnt, EV_VEC_angles, bodyAngles);
+	
+	// AÑADIDO: Forzar al motor a usar nuestros ángulos manualmente.
+	set_pev(iEnt, pev_fixangle, 1);
+}
+
+stock FindBestEnemyTarget(iEnt)
+{
+    new Float:closest_dist = ATTACK_DISTANCE;
+    new best_target = 0;
+    new Float:vecEntOrigin[3];
+    pev(iEnt, pev_origin, vecEntOrigin);
+
+    new max_ents = global_get(glb_maxEntities);
+    for (new i = 1; i <= max_ents; i++)
+    {
+        if (!pev_valid(i) || i == iEnt) continue;
+
+        new classname[32];
+        pev(i, pev_classname, classname, charsmax(classname));
+        
+        if (containi(classname, "monster_") == -1) continue;
+        
+        if (equali(classname, "monster_barney") || equali(classname, "monster_gargantua") || equali(classname, "monster_gman") || equali(classname, "monster_scientist") || equali(classname, "monster_cockroach")) continue;
+
+        if (pev(i, pev_deadflag) != DEAD_NO || pev(i, pev_flags) & FL_NOTARGET) continue;
+		
+		new Float:vecMonsterOrigin[3];
+		pev(i, pev_origin, vecMonsterOrigin);
+		
+		new Float:dist = get_distance_f(vecEntOrigin, vecMonsterOrigin);
+		
+		if (dist < closest_dist)
+		{
+			if (IsLineOfSightClear(iEnt, i))
+			{
+				closest_dist = dist;
+				best_target = i;
+			}
+		}
+    }
+    return best_target;
+}
+
+stock bool:IsLineOfSightClear(iEnt, iTarget) {
+    new Float:vecStart[3], Float:vecEnd[3];
+    pev(iEnt, pev_origin, vecStart);
+    pev(iTarget, pev_origin, vecEnd);
+
+    new trace = create_tr2();
+    engfunc(EngFunc_TraceLine, vecStart, vecEnd, DONT_IGNORE_MONSTERS, iEnt, trace);
+    
+    new Float:fraction;
+    get_tr2(trace, TR_flFraction, fraction);
+    
+    new hit_entity;
+    get_tr2(trace, TR_pHit, hit_entity);
+
+    free_tr2(trace);
+
+    return (fraction == 1.0 || hit_entity == iTarget);
+}
+
+stock HookEntityToTarget(ent, target)
+{
+	new Float:vEntOrigin[3], Float:vTargetOrigin[3], Float:vVelocity[3];
+	pev(ent, pev_origin, vEntOrigin);
+	pev(target, pev_origin, vTargetOrigin);
+	vTargetOrigin[2] += 60.0;
+	
+	new Float:distance = get_distance_f(vEntOrigin, vTargetOrigin);
+	
+	if (distance > FOLLOW_DISTANCE) {
+		new Float:fl_Time = distance / HELICOPTER_SPEED;
+		vVelocity[0] = (vTargetOrigin[0] - vEntOrigin[0]) / fl_Time;
+		vVelocity[1] = (vTargetOrigin[1] - vEntOrigin[1]) / fl_Time;
+		vVelocity[2] = (vTargetOrigin[2] - vEntOrigin[2]) / fl_Time;
+	} else {
+		vVelocity[0] = 0.0; vVelocity[1] = 0.0; vVelocity[2] = 0.0;
+	}
+	entity_set_vector(ent, EV_VEC_velocity, vVelocity);
+}
+
+stock FindClosestPlayer(ent)
+{
+	new Float:closest_dist = 9999.0;
+	new best_target = 0;
+	new Float:vEntOrigin[3];
+	pev(ent, pev_origin, vEntOrigin);
+	for (new i = 1; i <= get_maxplayers(); i++) {
+		if (is_user_alive(i) && i != ent) {
+			new Float:vPlayerOrigin[3];
+			pev(i, pev_origin, vPlayerOrigin);
+			new Float:dist = get_distance_f(vEntOrigin, vPlayerOrigin);
+			if (dist < closest_dist) {
+				closest_dist = dist;
+				best_target = i;
+			}
+		}
+	}
+	return best_target;
+}
+
+stock find_player_by_name(const szName[])
+{
+	for (new i = 1; i <= get_maxplayers(); i++)
+	{
+		if (!is_user_connected(i)) {
+			continue;
+		}
+		
+		new szPlayerName[32];
+		get_user_name(i, szPlayerName, charsmax(szPlayerName));
+		if (equali(szName, szPlayerName))
+		{
+			return i;
+		}
+	}
+	return 0;
+}
+
+stock vector_subtract(const Float:v1[3], const Float:v2[3], Float:result[3]) {
+    result[0] = v1[0] - v2[0];
+    result[1] = v1[1] - v2[1];
+    result[2] = v1[2] - v2[2];
+}

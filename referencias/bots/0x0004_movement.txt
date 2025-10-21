@@ -1,0 +1,158 @@
+/*pBot actions. Logically: dunno't need to loop RunPlayerMove all the time at the end.
+Also we are getting rid OFF with that from checking pBot special stances like IN_RELOAD and other*/
+stock Function_FakePlayerThink(pBot, f_msecval)
+{
+	//Turned out of the wall/Duckjumping - not sure if this Bot is not stuck.
+	if(AEROBOT_TOUCH_WALL(pBot))
+	{			
+		//Disable for Deathmatch.
+		#if defined PB_WEAPON_MODE
+			
+			//NOTE: Try to hit unknown entity, maybe breakable.
+			if(!AEROBOT_IN_ATTACK(pBot))
+				Function_SelectMeleeWeapon(pBot);
+					
+		#endif	
+				
+		//Set buttons to duckjump. Try to break, maybe glass?
+		c_fakeplayer_button[pBot] = IN_FORWARD | IN_DUCK | IN_JUMP | IN_ATTACK2;
+				
+		//Set next think timeout.
+		c_fakeplayer_think_time[pBot] = get_gametime() + FAKE_PLAYER_THINK_TIMER_MIN / 4;
+				
+		//Stop jumping.
+		c_fakeplayer_walltouch[pBot] = false;
+
+		//Can switch back to primary.
+		c_fakeplayer_weapon[pBot] = true;				
+	}
+
+	//pBot is triggered to attack.
+	if(AEROBOT_IN_ATTACK(pBot))
+	{
+		//Get trick button;
+		new iButton;
+
+		//Start move.
+		if(c_fakeplayer_trick_move[pBot])
+		{
+			iButton = IN_FORWARD;
+
+			//Cool movement.
+			if(c_fakeplayer_action[pBot])
+				Function_RunPlayerMove(pBot, IN_DUCK | IN_JUMP, iButton, NULL, f_msecval);
+			else
+				Function_RunPlayerMove(pBot, IN_FORWARD, iButton, NULL, f_msecval);
+				
+			//Allow trick move once.
+			c_fakeplayer_trick_move[pBot] = false;				
+		}
+
+		//Move finished.
+		else
+		{
+			//Retrieve weapon.
+			/*if(PB_WEAPON_RUN(pBot))
+				iButton = IN_FORWARD;
+			else
+				iButton = Function_ReturnButton();*/
+
+			//Max difficulty moves.
+			if(get_cvar_num("apb_difficulty") > PB_MAX_DIFF - 1)				
+				iButton = IN_FORWARD | IN_DUCK | IN_JUMP;
+
+			//Lower
+			else
+				iButton = IN_FORWARD;	
+
+			if(c_fakeplayer_action[pBot])
+				Function_RunPlayerMove(pBot, IN_DUCK, iButton, NULL, f_msecval);
+			else	
+				Function_RunPlayerMove(pBot, IN_FORWARD, iButton, NULL, f_msecval);
+		}
+	}
+
+	//Attack time expired. Reset this state.
+	else
+	{
+		c_fakeplayer_attacking[pBot] = false;
+	}
+
+	//Continue do current think if enemy not found, attack time expired and previous think is not finished.
+	if(AEROBOT_CURRENT_THINK(pBot))
+	{
+		if(!c_fakeplayer_attacking[pBot])
+			Function_RunPlayerMove(pBot, c_fakeplayer_button[pBot], c_fakeplayer_button[pBot], NULL, f_msecval);
+	}
+
+	//Set next think only if pBot is not in Combat.
+	if(AEROBOT_RANDOM_THINK(pBot))
+	{			
+		//Only for Counter-Strike.
+		if(RUN_APB_GAME_COUNTERSTRIKE())
+		{
+			//Set random speed
+			c_fakeplayer_forward_speed[pBot] = random_float(DEFAULT_MOVE_SPEED, MAX_MOVE_SPEED);
+			c_fakeplayer_side_speed[pBot] = random_float(DEFAULT_MOVE_SPEED, MAX_MOVE_SPEED);
+		}		
+
+		//Set for alive players only. Is doubleducking?
+		if(is_user_alive(pBot) && !c_fakeplayer_crouch[pBot])
+		{
+			//Set Bot random angle and view.
+			Function_SetAngles(pBot);	
+					
+			//Apply angles.
+			Function_ApplyAngles(pBot, c_fakeplayer_angles[pBot]);
+		}
+
+		//Randomly do impulse.
+		new PB_SPRAY, PB_CURRENT_IMPULSE;					
+		PB_SPRAY = random_num(1, 10);					
+		switch(PB_SPRAY)
+		{
+			case 1:
+			{
+				//Flashlight for Counter-Strike.
+				if(RUN_APB_GAME_COUNTERSTRIKE())						
+					PB_CURRENT_IMPULSE = Function_ReturnImpulse(PB_FLIMPULSE);
+				else
+					PB_CURRENT_IMPULSE = NULL;
+			}		
+			case 2..4: PB_CURRENT_IMPULSE = Function_ReturnImpulse(PB_SPIMPULSE);
+			default: PB_CURRENT_IMPULSE = NULL;
+		}	
+
+		//Reset Fakeplayer state and release buttons.
+		Function_RunPlayerMove(pBot, NULL, NULL, PB_CURRENT_IMPULSE, f_msecval);
+				
+		//Ready to trick move.
+		c_fakeplayer_trick_move[pBot] = true;
+				
+		//Can switch back to primary.
+		c_fakeplayer_weapon[pBot] = true;
+
+		#if defined PB_WEAPON_MODE
+
+			//Do different attack movement.
+			c_fakeplayer_action[pBot] = !c_fakeplayer_action[pBot];
+
+		#else
+		
+			//Turn off for FFA/Team Deathmatch or Zombie Mode
+			c_fakeplayer_action[pBot] = false;
+
+		#endif	
+				
+		//Call random Bot action and next think timeout.
+		Function_SetMovement(pBot);	
+				
+		//Set between next think. Random slowmotion movement.
+		#if defined PB_SLOWMOTION
+				
+			c_fake_player_motion = random_float(PB_MINSPEED / 2, PB_MAXSPEED / 2);
+					
+		#endif
+		
+	}	
+}

@@ -1,0 +1,41 @@
+#include <amxmodx>
+#include <fakemeta>
+
+new cvar_remove_doors;
+new const Float:INVALID_ORIGIN[3] = {8192.0, 8192.0, 8192.0};
+
+public plugin_init()
+{
+    register_plugin("remove_doors", "2.0", "not_a_door");
+    
+    // [0 - none | 1 - only rotating | 2 - all doors]
+    cvar_remove_doors = register_cvar("amx_remove_doors", "2");
+
+    register_event("HLTV", "event_round_start", "a", "1=0", "2=0");
+}
+
+public event_round_start()
+{
+    if (get_pcvar_num(cvar_remove_doors) > 0)
+        set_task(0.1, "remove_doors");
+}
+
+public remove_doors()
+{
+    new mode = get_pcvar_num(cvar_remove_doors);
+
+    if (mode >= 1)
+        remove_class_entities("func_door_rotating");
+
+    if (mode >= 2)
+        remove_class_entities("func_door");
+}
+
+remove_class_entities(const classname[])
+{
+    new ent = -1;
+    while ((ent = engfunc(EngFunc_FindEntityByString, ent, "classname", classname)) > 0)
+    {
+        engfunc(EngFunc_SetOrigin, ent, INVALID_ORIGIN);
+    }
+} 

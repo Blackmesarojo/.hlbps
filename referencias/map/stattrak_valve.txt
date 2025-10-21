@@ -1,0 +1,230 @@
+#include <amxmodx>
+#include <engine>
+#include <fakemeta>
+#include <hamsandwich>
+#include <nvault>
+
+#if AMXX_VERSION_NUM < 190
+	#define BACKWARDS_COMPATIBLE
+	#define MAX_NAME_LENGTH 32
+	#define MAX_PLAYERS 32
+	#define VERSION "1.2 (1.8.2)"
+#else
+	#include <json>
+	#define VERSION "1.2"
+#endif
+
+new const vault_name[] = "stattrak"
+new g_MsgStatusText, vault
+
+enum _:WeaponOrder
+{
+	weapon_name[MAX_NAME_LENGTH],
+	weapon_name_fmt[MAX_NAME_LENGTH],
+}
+new const weapon_info[HLW_SNARK + 1][WeaponOrder] =
+{
+	{ "World/Void", "" },
+	{ "Crowbar", "weapon_crowbar" },
+	{ "Glock", "weapon_9mmhandgun" },
+	{ "Python", "weapon_357" },
+	{ "MP5", "weapon_9mmAR" },
+	{ "Chain Gun", "" },
+	{ "Crossbow", "weapon_crossbow" },
+	{ "Shotgun", "weapon_shotgun" },
+	{ "RPG", "weapon_rpg" },
+	{ "Gauss", "weapon_gauss" },
+	{ "Egon", "weapon_egon" },
+	{ "Hornetgun", "weapon_hornetgun" },
+	{ "Grenade", "weapon_handgrenade" },
+	{ "Tripmine", "weapon_tripmine" },
+	{ "Satchel", "weapon_satchel" },
+	{ "Snark", "weapon_snark" }
+}
+
+enum _:PlayerData
+{
+	weapon[HLW_SNARK + 1],
+	total,
+	cur_weapon
+}
+new Player[MAX_PLAYERS + 1][PlayerData]
+
+public plugin_init()
+{
+	register_plugin("StatTrak", VERSION, "big")
+	register_event("DeathMsg", "player_killed", "a", "1>0")
+	RegisterHam(Ham_Spawn, "player", "player_weapon_spawn", 1)
+	register_event("CurWeapon", "player_current_weapon", "be", "1=1")
+	register_clcmd("say stattrak", "clcmd_stattrak")
+
+	for (new i = HLW_CROWBAR; i <= HLW_SNARK; i++)
+	{
+		if (i == HLW_CHAINGUN)
+			continue
+		RegisterHam(Ham_Item_Deploy, weapon_info[i][weapon_name_fmt], "player_weapon", 1)
+	}
+
+	if ((vault = nvault_open(vault_name)) == INVALID_HANDLE)
+	{
+		new message[64]
+		formatex(message, charsmax(message), "Cannot open %s vault", vault_name)
+		set_fail_state(message)
+	}
+	set_task(1.0, "hud_weapon_stats", .flags="b")
+	g_MsgStatusText = get_user_msgid("StatusText")
+}
+
+public plugin_natives()
+	register_native("get_user_stattrak", "_get_user_stattrak")
+
+public plugin_end()
+	nvault_close(vault)
+
+public client_authorized(id)
+{
+	new authid[MAX_NAME_LENGTH]
+	static data[256]
+	get_user_authid(id, authid, charsmax(authid))
+	arrayset(Player[id][weapon], 0, sizeof(Player[][weapon]))
+
+	if (!is_user_bot(id) && !is_user_hltv(id))
+	{
+		nvault_get(vault, authid, data, charsmax(data))
+		
+		#if defined BACKWARDS_COMPATIBLE
+			new text[8]
+			replace(data, charsmax(data), "[", "")
+			replace(data, charsmax(data), "]", "")
+			replace_all(data, charsmax(data), ",", " ")
+			for (new i = HLW_NONE; i <= HLW_SNARK; i++)
+			{
+				strbreak(data, text, charsmax(text), data, charsmax(data))
+				Player[id][weapon][i] = str_to_num(text)
+			}
+		#else
+			new JSON:array = json_parse(data)
+			if (json_is_array(array))
+			{
+				for (new i = HLW_NONE; i <= HLW_SNARK; i++)
+					Player[id][weapon][i] = json_array_get_number(array, i)
+				json_free(array)
+			}
+		#endif
+	}
+}
+
+public client_disconnected(id)
+{
+	static data[256], authid[MAX_NAME_LENGTH]
+	if (!is_user_bot(id) && !is_user_hltv(id))
+	{
+		get_user_authid(id, authid, charsmax(authid))
+		#if defined BACKWARDS_COMPATIBLE
+			new len = 1
+			data[0] = '['
+			for (new i = HLW_NONE; i < HLW_SNARK; i++)
+				len += formatex(data[len], charsmax(data), "%d,", Player[id][weapon][i])
+			len += formatex(data[len], charsmax(data), "%d]", Player[id][weapon][HLW_SNARK])
+		#else
+			new JSON:array = json_init_array()
+			for (new i = HLW_NONE; i < HLW_SNARK; i++)
+				json_array_append_number(array, Player[id][weapon][i])
+			json_serial_to_string(array, data, charsmax(data))
+			json_free(array)
+		#endif
+		nvault_set(vault, authid, data)
+	}
+}
+
+
+public player_killed()
+{
+	new killer = read_data(1)
+	Player[killer][total] = 1 + Player[killer][weapon][get_user_weapon(killer)]++
+}
+
+public player_weapon(weapon_entity)
+{
+	new id = pev(weapon_entity, pev_owner)
+	if (id >= 1 && id <= 32)
+	{
+		static classname[MAX_NAME_LENGTH]
+		entity_get_string(weapon_entity, EV_SZ_classname, classname, charsmax(classname))
+		Player[id][total] = Player[id][weapon][get_weaponid(classname)]
+	}
+}
+
+public player_weapon_spawn(id)
+	Player[id][total] = Player[id][weapon][HLW_GLOCK]
+
+public player_current_weapon(id)
+{
+	static WeaponID; WeaponID = read_data(2)
+	if (Player[id][cur_weapon] != WeaponID)
+	{
+		Player[id][cur_weapon] = WeaponID
+		Player[id][total] = Player[id][weapon][WeaponID]
+	}
+}
+
+public clcmd_stattrak(id)
+{
+	static menu_item[MAX_NAME_LENGTH]
+	new menu = menu_create("StatTrak", "menu_handler")
+	for (new i = 0; i < sizeof(weapon_info); i++)
+	{
+		if (Player[id][weapon][i])
+		{
+			formatex(menu_item, charsmax(menu_item), "\w%s \d%d", weapon_info[i][weapon_name], Player[id][weapon][i])
+			#if !defined BACKWARDS_COMPATIBLE
+				menu_addtext2(menu, menu_item)
+			#else
+				menu_additem(menu, menu_item)
+			#endif
+
+		}
+	}
+	
+	#if !defined BACKWARDS_COMPATIBLE
+		menu_setprop(menu, MPROP_SHOWPAGE, true)
+	#endif
+	menu_display(id, menu)
+}
+
+public _get_user_stattrak(_p, _a)
+	return Player[get_param(1)][weapon][get_param(2)]
+
+public menu_handler(id, menu)
+	menu_destroy(menu)
+
+public hud_weapon_stats()
+{
+	static players[MAX_PLAYERS], num, id
+	get_players(players, num, "ch")
+	for (new i = 0; i < num; i++)
+	{
+		id = players[i]
+		if (is_user_alive(id))
+		{
+			if (Player[id][total])
+				show_status(id, "StatTrak: %d", Player[id][total])
+			else
+				show_status(id, NULL_STRING)
+		}
+
+		else
+			show_status(id, NULL_STRING)
+	}
+}
+
+stock show_status(id, const message[], any:...)
+{
+	static text[128];
+	vformat(text, 127, message, 3);
+
+	message_begin(MSG_ONE_UNRELIABLE, g_MsgStatusText, _, id);
+	write_byte(0);
+	write_string(text);
+	message_end();
+}

@@ -1,0 +1,1071 @@
+
+// Special thanks to those who helped me
+/*
+OciXCrom™
+Hattrick
+v3x
+---------------------------------------------------------------------
+Everyone forgot to mention his name in the list is long the creative.
+---------------------------------------------------------------------
+*/
+
+
+#include <amxmodx>
+#include <fakemeta>
+#include <engine>
+#include <fun>
+#include <cstrike>
+#include <amxmisc>
+#include <entity_maths>
+#include <colorchat>
+#include <hamsandwich>
+#include <xs>
+#include <csx>
+
+const OFFSET_CSDEATHS = 444
+const OFFSET_CSTEAMS = 114
+const OFFSET_LINUX = 5
+new mod_name[33]
+new Rocket_Mode[33]
+new User_Control[33]
+new Bazooka_Ammo1[33]
+new g_exploSpr, g_smokeSpr
+new bool:RoundEnd
+new bool:is_cstrike
+new bool:Has_Bazooka[33]
+new bool:Allow_Shooting[33]
+new bool:Bazooka_Active[33]
+new bool:g_restart_attempt[33]
+new g_szBanFile[] = "arvEL_banned_RPG.ini"
+new RocketSmoke
+new g_sModelIndexSmoke
+new g_sModelIndexFireball
+new bool:E_KeyPress_Delay[33]
+static PLUGIN_NAME[]	=	"RPG 7: [Can't Shoot] + [SEMO.Pa3x]"
+static PLUGIN_AUTHOR[] 	=	"[Can't Shoot] + [SEMO.Pa3x]"
+static PLUGIN_VERSION[]	=	"2.3 Beta"
+
+public plugin_init()
+{
+register_plugin(PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR)
+register_cvar("RPG_active", "1")
+register_concmd("rpg","cmd_Drop_Bazooka")
+register_clcmd("say /rpg","cmd_BuyBazooka")
+register_clcmd("fullupdate","cmd_FullUpDate") 
+register_event("CurWeapon","Event_CurWeapon","be","1=1")
+register_event("DeathMsg","Event_DeathMsg","a")
+register_event("ResetHUD","Event_HudReset","be")
+register_event("TextMsg","Event_WeaponDrop","be","2=#Weapon_Cannot_Be_Dropped")
+register_event("TextMsg","Event_RestartAttempt","a","2=#Game_will_restart_in")
+register_logevent("LogEvent_RoundStart",2,"1=Round_Start")
+register_logevent("LogEvent_RoundEnd",2,"1=Round_End")	
+register_forward(FM_CmdStart,"fw_CmdStart")
+register_forward(FM_EmitSound,"fw_EmitSound")
+new szFilePath[128]; 
+get_configsdir(szFilePath, charsmax(szFilePath)); 
+add(szFilePath, charsmax(szFilePath), "/arvEL_banned_RPG.ini"); 
+new f = fopen(szFilePath, "rt"); 
+if(!f) 
+{
+set_fail_state("Failed to open arvEL_banned_RPG.ini file!"); 
+}
+CheckBanned()
+get_modname(mod_name,31)
+is_cstrike = equal(mod_name,"cstrike") ? true : false
+}
+
+public CheckBanned()
+{
+new szCfgDir[64]
+get_configsdir(szCfgDir,63)
+new szFileStr[64]
+format(szFileStr,63,"%s/%s",szCfgDir,g_szBanFile)
+if(file_exists(szFileStr))
+{
+new szMapName[64], bool:blMatch
+get_mapname(szMapName,63)
+new szText[164]
+new nLen=0,nLine=0
+while(read_file(szFileStr,nLine++,szText,163,nLen))
+{
+if(szText[0]==';') continue
+if(equali(szText,szMapName))
+{
+blMatch = true
+break
+}
+}
+set_cvar_num("RPG_active", blMatch ? 0 : 1)
+}
+}
+
+public plugin_precache()
+{
+precache_model("models/w_rpg.mdl")
+precache_model("models/v_rpg.mdl")
+precache_model("models/p_rpg.mdl")
+precache_model("models/rpgrocket.mdl")
+g_exploSpr = engfunc( EngFunc_PrecacheModel, "sprites/shockwave.spr" );
+g_smokeSpr = engfunc(EngFunc_PrecacheModel, "sprites/black_smoke3.spr")
+precache_model("models/v_knife.mdl")
+precache_model("models/p_knife.mdl")
+precache_model("models/shield/v_shield_knife.mdl")
+precache_model("models/shield/p_shield_knife.mdl")
+precache_sound("items/gunpickup4.wav")	
+precache_sound("weapons/dryfire1.wav")
+precache_sound("weapons/mortarhit.wav")
+precache_sound("weapons/rocketfire1.wav")
+precache_sound("ambience/particle_suck2.wav")
+g_sModelIndexSmoke  = precache_model("sprites/steam1.spr")
+g_sModelIndexFireball = precache_model("sprites/zerogxplode.spr")
+RocketSmoke = precache_model("sprites/smoke.spr")
+}
+
+stock bool:has_shield(id)
+{	
+new modelName[32]
+entity_get_string(id, EV_SZ_viewmodel, modelName, 31)
+if(containi(modelName, "v_shield_") != -1) return true	
+return false	
+}
+
+public client_connect(id)
+{
+Rocket_Mode[id] = 1
+Has_Bazooka[id] = false
+Allow_Shooting[id] = false
+Bazooka_Active[id] = false
+E_KeyPress_Delay[id] = false	
+}
+
+public  client_disconnect (id)
+{
+Rocket_Mode[id] = 1
+Has_Bazooka[id] = false
+Allow_Shooting[id] = false
+Bazooka_Active[id] = false
+E_KeyPress_Delay[id] = false	
+}
+
+public Event_PlayerSpawn (id)
+{
+new Rocket = find_ent_by_class(-1, "rpgrocket")
+while (Rocket > 0)
+{
+remove_entity(Rocket)
+Rocket = find_ent_by_class(Rocket, "rpgrocket")
+}
+
+new RPG = find_ent_by_class(-1, "rpglancher")
+while (RPG > 0)
+{
+remove_entity(RPG)
+RPG = find_ent_by_class(RPG, "rpglancher")
+}
+
+new v_oldmodel[64], p_oldmodel[64]
+entity_get_string(id, EV_SZ_viewmodel, v_oldmodel, 63)
+entity_get_string(id, EV_SZ_weaponmodel, p_oldmodel, 63)
+if (equal(v_oldmodel, "models/v_rpg.mdl") || equal(p_oldmodel, "models/p_rpg.mdl"))
+{
+if (!Has_Bazooka[id])
+{
+new weaponid, clip, ammo
+weaponid = get_user_weapon(id, clip, ammo)
+new weaponname[64]
+get_weaponname(weaponid, weaponname, 63)
+new v_model[64], p_model[64]
+format(v_model, 63, "%s", weaponname)
+format(p_model, 63, "%s", weaponname)
+replace(v_model, 63, "weapon_", "v_")
+format(v_model, 63, "models/%s.mdl", v_model)
+entity_set_string(id, EV_SZ_viewmodel, v_model)
+replace(p_model, 63, "weapon_", "p_")
+format(p_model, 63, "models/%s.mdl", p_model)
+entity_set_string(id, EV_SZ_weaponmodel, p_model)
+}
+}
+return PLUGIN_CONTINUE
+}
+
+public LogEvent_RoundStart()
+{
+RoundEnd = false
+new players[32], num
+get_players(players, num, "a")
+for (new i; i < num; ++i)
+if (Has_Bazooka[players[i]])
+Allow_Shooting[players[i]] = true
+return PLUGIN_CONTINUE
+}
+
+public LogEvent_RoundEnd()
+{
+RoundEnd = true
+new players[32], num
+get_players(players, num, "a")
+for (new i; i < num; ++i)
+if (Has_Bazooka[players[i]])
+Allow_Shooting[players[i]] = false
+return PLUGIN_CONTINUE
+}
+
+public cmd_FullUpDate()
+{
+return PLUGIN_HANDLED
+}
+
+public Event_RestartAttempt()
+{
+new players[32], num
+get_players(players, num, "a")
+for (new i; i < num; ++i)
+g_restart_attempt[players[i]] = true
+}
+
+public Event_HudReset (id)
+{
+if (g_restart_attempt[id])
+{
+g_restart_attempt[id] = false
+return
+}
+Event_PlayerSpawn (id)
+}
+
+public rpg_idle (data[])
+{	
+if ((Bazooka_Ammo1[data[0]] > 0) && (Rocket_Mode[data[0]] == 1))
+entity_set_int(data[0], EV_INT_weaponanim, 0)
+if ((Bazooka_Ammo1[data[0]] <= 0) && (Rocket_Mode[data[0]] == 1))
+entity_set_int(data[0], EV_INT_weaponanim, 8)
+}
+
+public rpg_reload_start (data[])
+{
+if ((Bazooka_Ammo1[data[0]] > 0) && (Rocket_Mode[data[0]] == 1))
+entity_set_int(data[0], EV_INT_weaponanim, 2)
+
+if ((Bazooka_Ammo1[data[0]] <= 0) && (Rocket_Mode[data[0]] == 1))
+entity_set_int(data[0], EV_INT_weaponanim, 8)
+}
+
+public rpg_fidget (data[])
+{
+if (!RoundEnd) Allow_Shooting[data[0]] = true 	
+if ((Bazooka_Ammo1[data[0]] > 0) && (Rocket_Mode[data[0]] == 1))
+entity_set_int(data[0], EV_INT_weaponanim, 1)
+if ((Bazooka_Ammo1[data[0]] <= 0) && (Rocket_Mode[data[0]] == 1))
+entity_set_int(data[0], EV_INT_weaponanim, 9)
+set_task(6.0, "rpg_idle", data[0]+2023, data[0], 1)
+}
+
+public fw_EmitSound (id, channel, sample[]) {
+
+if(!is_user_alive(id) || !is_user_connected(id)) 
+return FMRES_IGNORED
+
+if(Bazooka_Active[id]) {
+
+if(containi(sample, "weapons/knife") != -1)
+return FMRES_SUPERCEDE
+
+}
+
+return FMRES_IGNORED
+
+}
+
+public fire_rocket (id) {
+
+new data[1]
+data[0] = id
+//Start reload animation.
+set_task(1.0, "rpg_reload_start", id+2021, data, 1)
+
+//Ends reload animation and enables fireing.
+set_task(3.1, "rpg_fidget", id+2022, data, 1)
+
+new Float:StartOrigin[3], Float:Angle[3]
+
+new PlayerOrigin[3]
+
+get_user_origin(id, PlayerOrigin, 1)
+
+StartOrigin[0] = float(PlayerOrigin[0])
+StartOrigin[1] = float(PlayerOrigin[1])
+StartOrigin[2] = float(PlayerOrigin[2])
+
+entity_get_vector(id, EV_VEC_v_angle, Angle)
+
+Angle[0] = Angle[0] * -1.0
+
+new RocketEnt = create_entity("info_target")
+
+if (pev_valid(RocketEnt))
+{ 
+engfunc(EngFunc_SetModel, RocketEnt, "models/rpgrocket.mdl");
+set_pev(RocketEnt, pev_classname, "rpgrocket");
+set_pev(RocketEnt, pev_movetype, MOVETYPE_FLY);
+set_pev(RocketEnt, pev_solid, SOLID_BBOX);
+set_pev(RocketEnt, pev_effects, EF_LIGHT | EF_BRIGHTLIGHT);
+set_pev(RocketEnt, pev_owner, id);
+new Float:VAngle[3];
+pev(id, pev_v_angle, VAngle);
+engfunc(EngFunc_MakeVectors, VAngle);
+new Float:Forward[3], Float:Velocity[3];
+global_get(glb_v_forward, Forward);
+Forward[0]*=64.0;
+Forward[1]*=64.0;
+Forward[2]*=64.0;			
+global_get(glb_v_forward, Velocity);
+Velocity[0]*=1750.0;
+Velocity[1]*=1750.0;
+Velocity[2]*=1750.0;
+new Float:Origin[3];
+pev(id, pev_origin, Origin);
+Origin[0] += Forward[0];
+Origin[1] += Forward[1];
+set_pev(RocketEnt, pev_origin, Origin);
+set_pev(RocketEnt, pev_velocity, Velocity);
+new Float: Angles[3];
+engfunc(EngFunc_VecToAngles, Velocity, Angles);
+set_pev(RocketEnt, pev_angles, Angles);
+message_begin(MSG_BROADCAST, SVC_TEMPENTITY);
+write_byte(TE_BEAMFOLLOW);
+write_short(RocketEnt);
+write_short(RocketSmoke);
+write_byte(25);
+write_byte(5);
+write_byte(191);
+write_byte(191);
+write_byte(191);
+write_byte(random_num(150, 240));
+message_end();		 
+
+static origin[3]
+get_user_origin(id, origin)
+message_begin(MSG_PVS, SVC_TEMPENTITY, origin)
+write_byte(TE_SMOKE) // TE id
+write_coord(origin[0]) // x
+write_coord(origin[1]) // y
+write_coord(origin[2]-50) // z
+write_short(g_sModelIndexSmoke) // sprite
+write_byte(random_num(30, 40)) // scale
+write_byte(random_num(20, 40)) // framerate
+message_end()					 
+}
+emit_sound(RocketEnt, CHAN_WEAPON, "weapons/rocketfire1.wav", VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+
+if (Rocket_Mode[id] == 1) Bazooka_Ammo1[id]--
+
+
+return PLUGIN_HANDLED
+
+}
+
+public pfn_touch (toucher, touched)
+{
+
+new ClassName1[32]
+new ClassName2[32]
+
+if(!is_valid_ent(toucher))
+return PLUGIN_CONTINUE
+
+if (is_valid_ent(toucher))
+entity_get_string(toucher, EV_SZ_classname, ClassName1, 31)
+
+if (is_valid_ent(touched))
+entity_get_string(touched, EV_SZ_classname, ClassName2, 31)
+
+
+if (equal(ClassName1, "rpgrocket"))
+{
+
+new vExplodeAt[3]
+new Float:fl_vExplodeAt[3]
+entity_get_vector(toucher, EV_VEC_origin, fl_vExplodeAt)
+
+vExplodeAt[0] = floatround(fl_vExplodeAt[0])
+vExplodeAt[1] = floatround(fl_vExplodeAt[1])
+vExplodeAt[2] = floatround(fl_vExplodeAt[2])
+
+emit_sound(toucher, CHAN_WEAPON, "weapons/mortarhit.wav", 1.0, 0.5, 0, PITCH_NORM)
+emit_sound(toucher, CHAN_VOICE, "weapons/mortarhit.wav", 1.0, 0.5, 0, PITCH_NORM)
+
+
+for (new Explosion = 1; Explosion < 8; Explosion++)
+{
+// Explosion
+message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+write_byte(3) // TE_EXPLOSION
+write_coord(vExplodeAt[0]) // startorigin
+write_coord(vExplodeAt[1])
+write_coord(vExplodeAt[2] + 5)
+write_short(g_sModelIndexFireball) // sprite
+write_byte(random_num(0,20) + 20)
+write_byte(12)
+write_byte(0)
+message_end()			
+}	
+
+
+// Create the burn decal
+message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+write_byte(TE_GUNSHOTDECAL)
+write_coord(vExplodeAt[0])
+write_coord(vExplodeAt[1])
+write_coord(vExplodeAt[2])
+write_short(0)			
+
+if (is_cstrike) write_byte(random_num(46,48))  // decal
+if (!is_cstrike) write_byte(random_num(58,60)) // decal
+
+message_end()
+
+new PlayerPos[3], Distance
+new attackera = entity_get_edict(toucher, EV_ENT_owner)
+
+// Shake screen
+message_begin(MSG_ONE_UNRELIABLE, get_user_msgid("ScreenShake"), {0,0,0}, attackera); 
+write_short(255<<10);
+write_short(10<<10);
+write_short(255<<10);
+message_end() 		
+for (new i = 1; i < 32; i++) {
+
+if (is_user_alive(i) == 1)
+{
+
+get_user_origin(i, PlayerPos)
+Distance = get_distance(PlayerPos, vExplodeAt)
+if (Distance <= 250) {  // Screenshake Radius
+new attacker = entity_get_edict(toucher, EV_ENT_owner)
+if (!get_user_godmode(i))
+{
+if(get_user_team(i) == get_user_team(attacker) && i != attacker)
+continue; 
+						
+ExecuteHamB(Ham_Killed, i, attacker, 2)
+UpdateFrags(attacker, i, 1 - 1, 0, 0)
+	
+
+static origin[3]
+get_user_origin(i, origin)
+
+// Tracers?
+message_begin(MSG_PVS, SVC_TEMPENTITY, origin)
+write_byte(TE_IMPLOSION) // TE id
+write_coord(origin[0]) // x
+write_coord(origin[1]) // y
+write_coord(origin[2]) // z
+write_byte(128) // radius
+write_byte(20) // count
+write_byte(3) // duration
+message_end()
+
+// Particle burst?
+message_begin(MSG_PVS, SVC_TEMPENTITY, origin)
+write_byte(TE_PARTICLEBURST) // TE id
+write_coord(origin[0]) // x
+write_coord(origin[1]) // y
+write_coord(origin[2]) // z
+write_short(50) // radius
+write_byte(70) // color
+write_byte(3) // duration (will be randomized a bit)
+message_end()
+
+// Light sparkle?
+message_begin(MSG_PVS, SVC_TEMPENTITY, origin)
+write_byte(TE_DLIGHT) // TE id
+write_coord(origin[0]) // x
+write_coord(origin[1]) // y
+write_coord(origin[2]) // z
+write_byte(20) // radius
+write_byte(0) // r
+write_byte(250) // g
+write_byte(150) // b
+write_byte(2) // life
+write_byte(0) // decay rate
+message_end()	
+
+// Explosion
+message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+write_byte(3) // TE_EXPLOSION
+write_coord(origin[0]) // startorigin
+write_coord(origin[1])
+write_coord(origin[2] + 5)
+write_short(g_sModelIndexFireball) // sprite
+write_byte(random_num(0,20) + 20)
+write_byte(12)
+write_byte(0)
+message_end()					
+				
+
+// Shake screen
+message_begin(MSG_ONE_UNRELIABLE, get_user_msgid("ScreenShake"), {0,0,0}, i); 
+write_short(255<<10);
+write_short(10<<10);
+write_short(255<<10);
+message_end() 
+
+// Red screen
+message_begin(MSG_ONE_UNRELIABLE,get_user_msgid("ScreenFade"),{0,0,0}, i)
+write_short( 10<<12 )
+write_short( 10<<16 )
+write_short( 1<<1 )
+write_byte( 255 )
+write_byte( 0 )
+write_byte( 0 )
+write_byte( 255 )
+message_end()
+
+// Make some blood
+message_begin(MSG_PVS, SVC_TEMPENTITY, origin)
+write_byte(TE_LAVASPLASH) 
+write_coord(origin[0]) 
+write_coord(origin[1]) 
+write_coord(origin[2] - 26) 
+message_end()
+
+// Smoke
+message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+write_byte(5) // TE_SMOkE
+write_coord(origin[0]) // startorigin
+write_coord(origin[1])
+write_coord(origin[2] + 15)
+write_short(g_smokeSpr) // sprite
+write_byte(60)
+write_byte(10)
+message_end()
+
+
+message_begin( MSG_BROADCAST, SVC_TEMPENTITY );
+write_byte( TE_BEAMCYLINDER); // TE id
+engfunc( EngFunc_WriteCoord, origin[0] ); // x
+engfunc( EngFunc_WriteCoord, origin[1] ); // y
+engfunc( EngFunc_WriteCoord, origin[2] ); // z
+engfunc( EngFunc_WriteCoord, origin[0] ); // x axis
+engfunc( EngFunc_WriteCoord, origin[1] ); // y axis
+engfunc( EngFunc_WriteCoord, origin[2] + 400.0 ); // z axis
+write_short( g_exploSpr ); // sprite
+write_byte( 0 ); // startframe
+write_byte( 0 ); // framerate
+write_byte( 4 ); // life
+write_byte( 60 ); // width
+write_byte( 0 ); // noise
+write_byte( 121 ); // red
+write_byte( 121 ); // green
+write_byte( 121 ); // blue
+write_byte( 200 ); // brightness
+write_byte( 0 ); // speed
+message_end( );
+
+message_begin( MSG_BROADCAST, SVC_TEMPENTITY );
+write_byte( TE_BEAMCYLINDER); // TE id
+engfunc( EngFunc_WriteCoord, origin[0] ); // x
+engfunc( EngFunc_WriteCoord, origin[1] ); // y
+engfunc( EngFunc_WriteCoord, origin[2] ); // z
+engfunc( EngFunc_WriteCoord, origin[0] ); // x axis
+engfunc( EngFunc_WriteCoord, origin[1] ); // y axis
+engfunc( EngFunc_WriteCoord, origin[2] + 700.0 ); // z axis
+write_short( g_exploSpr ); // sprite
+write_byte( 0 ); // startframe
+write_byte( 0 ); // framerate
+write_byte( 4 ); // life
+write_byte( 110 ); // width
+write_byte( 0 ); // noise
+write_byte( 121 ); // red
+write_byte( 121 ); // green
+write_byte( 121 ); // blue
+write_byte( 200 ); // brightness
+write_byte( 0 ); // speed
+message_end( );
+
+message_begin( MSG_BROADCAST, SVC_TEMPENTITY );
+write_byte( TE_BEAMCYLINDER); // TE id
+engfunc( EngFunc_WriteCoord, origin[0] ); // x
+engfunc( EngFunc_WriteCoord, origin[1] ); // y
+engfunc( EngFunc_WriteCoord, origin[2] ); // z
+engfunc( EngFunc_WriteCoord, origin[0] ); // x axis
+engfunc( EngFunc_WriteCoord, origin[1] ); // y axis
+engfunc( EngFunc_WriteCoord, origin[2] + 900.0 ); // z axis
+write_short( g_exploSpr ); // sprite
+write_byte( 0 ); // startframe
+write_byte( 0 ); // framerate
+write_byte( 4 ); // life
+write_byte( 160 ); // width
+write_byte( 0 ); // noise
+write_byte( 121 ); // red
+write_byte( 121 ); // green
+write_byte( 121 ); // blue
+write_byte( 200 ); // brightness
+write_byte( 0 ); // speed
+message_end( );	 
+
+//BeamCilinder
+message_begin( MSG_BROADCAST,SVC_TEMPENTITY,origin )
+write_byte ( 21 ) //TE_BEAMCYLINDER
+write_coord( origin[0] )
+write_coord( origin[1] )
+write_coord( origin[2] )
+write_coord( origin[0] )
+write_coord( origin[1] )
+write_coord( origin[2]+200 )
+write_short( g_exploSpr )
+write_byte ( 0 )
+write_byte ( 1 )
+write_byte ( 6 )
+write_byte ( 8 )
+write_byte ( 1 )
+write_byte ( 255 )
+write_byte ( 255 )
+write_byte ( 192 )
+write_byte ( 128 )
+write_byte ( 5 )
+message_end()					
+
+}
+}
+
+}
+
+}
+
+new owner = entity_get_edict(toucher, EV_ENT_owner)
+attach_view(owner, owner)
+User_Control[owner] = 0
+remove_entity(toucher)
+
+static Entity_List[21]
+
+new entites_in_radius
+entites_in_radius = find_sphere_class(0, "func_breakable",250 * 0.20,Entity_List,20,fl_vExplodeAt)
+
+
+for(new i=0;i < entites_in_radius; i++)
+{
+
+force_use(Entity_List[i],Entity_List[i])
+remove_task(Entity_List[i])
+
+}
+
+}
+
+if (equal(ClassName1, "rpglancher")) {
+
+if(has_shield(touched))
+return PLUGIN_CONTINUE
+
+new Picker[32]
+
+if (is_valid_ent(touched))
+entity_get_string(touched, EV_SZ_classname, Picker, 31)
+
+if (equal(Picker, "player")) {
+
+give_item(touched, "weapon_knife")
+
+Allow_Shooting[touched] = true
+Has_Bazooka[touched] = true
+
+Bazooka_Ammo1[touched] = entity_get_int(toucher, EV_INT_iuser1)
+
+emit_sound(touched, CHAN_WEAPON, "items/gunpickup2.wav", VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+
+remove_entity(toucher)
+
+new temp[2], weaponID = get_user_weapon(touched, temp[0], temp[1])
+
+if(weaponID == CSW_KNIFE)
+{
+
+Bazooka_Active[touched] = true
+if (Bazooka_Ammo1[touched] > 0) entity_set_int(touched, EV_INT_weaponanim, 2)
+if (Bazooka_Ammo1[touched] <= 0) entity_set_int(touched, EV_INT_weaponanim, 8)
+
+}
+
+}
+
+
+}
+
+return PLUGIN_CONTINUE
+
+}
+
+// Update Player Frags and Deaths
+UpdateFrags(attacker, victim, frags, deaths, scoreboard)
+{
+// Set attacker frags
+set_pev(attacker, pev_frags, float(pev(attacker, pev_frags) + frags))
+
+// Set victim deaths
+fm_cs_set_user_deaths(victim, cs_get_user_deaths(victim) + deaths)
+
+// Update scoreboard with attacker and victim info
+if (scoreboard)
+{
+message_begin(MSG_BROADCAST, get_user_msgid("ScoreInfo"))
+write_byte(attacker) // id
+write_short(pev(attacker, pev_frags)) // frags
+write_short(cs_get_user_deaths(attacker)) // deaths
+write_short(0) // class?
+write_short(fm_cs_get_user_team(attacker)) // team
+message_end()
+
+message_begin(MSG_BROADCAST, get_user_msgid("ScoreInfo"))
+write_byte(victim) // id
+write_short(pev(victim, pev_frags)) // frags
+write_short(cs_get_user_deaths(victim)) // deaths
+write_short(0) // class?
+write_short(fm_cs_get_user_team(victim)) // team
+message_end()
+}
+}
+
+// Get User Team
+stock fm_cs_get_user_team(id)
+{
+return get_pdata_int(id, OFFSET_CSTEAMS, OFFSET_LINUX);
+}
+
+// Set User Deaths
+stock fm_cs_set_user_deaths(id, value)
+{
+set_pdata_int(id, OFFSET_CSDEATHS, value, OFFSET_LINUX)
+}
+
+public cmd_Drop_Bazooka (id)
+{
+drop_lancher(id,0)
+return PLUGIN_HANDLED
+}
+
+public drop_rpglancher (id) {
+
+drop_lancher(id,1)
+
+Bazooka_Ammo1[id] = 0
+Has_Bazooka[id] = false
+Bazooka_Active[id] = false
+
+Event_CurWeapon(id)
+
+return PLUGIN_HANDLED
+
+}
+
+public drop_lancher (id, sel) {
+
+new Float:PlayerOrigin[3], Float:End[3], Float:Return[3], Float:TraceDirection[3], Float:Angles[3]
+
+if (sel == 0) VelocityByAim(id, 64, TraceDirection)
+if (sel == 1) VelocityByAim(id, 200, TraceDirection)
+
+entity_get_vector(id, EV_VEC_origin, PlayerOrigin)
+
+if (sel == 1) entity_get_vector(id, EV_VEC_angles, Angles)
+
+End[0] = TraceDirection[0] + PlayerOrigin[0]
+End[1] = TraceDirection[1] + PlayerOrigin[1]
+End[2] = TraceDirection[2] + PlayerOrigin[2]
+
+trace_line(id, PlayerOrigin, End, Return)
+
+Return[2] = PlayerOrigin[2]
+
+new RPG = create_entity("info_target")
+
+entity_set_string(RPG, EV_SZ_classname, "rpglancher")
+entity_set_model(RPG, "models/w_rpg.mdl")
+entity_set_origin(RPG, Return)
+
+if (sel == 1) {
+
+Angles[0] = 0.0
+Angles[2] = 0.0
+
+}
+
+if ( sel == 0) entity_set_vector(RPG, EV_VEC_angles, Angles)
+
+new Float:MinBox[3] = {-16.0, -16.0, 0.0}
+new Float:MaxBox[3] = {16.0, 16.0, 16.0}
+
+entity_set_vector(RPG, EV_VEC_mins, MinBox)
+entity_set_vector(RPG, EV_VEC_maxs, MaxBox)
+
+entity_set_int(RPG, EV_INT_solid, 1)
+entity_set_int(RPG, EV_INT_movetype, 6)
+
+if (sel == 0) entity_set_int(RPG, EV_INT_iuser1, 2)
+
+
+if (sel == 1) entity_set_int(RPG, EV_INT_iuser1, Bazooka_Ammo1[id])
+
+
+return PLUGIN_HANDLED
+
+}
+
+public delay (data2[]) {
+
+E_KeyPress_Delay[data2[0]] = false
+
+}
+
+public fw_CmdStart (id, uc_handle, seed)
+{
+
+if(!is_user_connected(id)) return FMRES_IGNORED
+if(!is_user_alive(id)) return FMRES_IGNORED
+if(!Has_Bazooka[id]) return FMRES_IGNORED
+
+if(has_shield(id)) {
+
+drop_rpglancher(id)
+return FMRES_IGNORED
+
+}
+
+new weaponid, clip, ammo
+weaponid = get_user_weapon(id, clip, ammo)
+
+if (weaponid == CSW_KNIFE)
+{
+
+new buttons = get_uc(uc_handle, UC_Buttons)
+new inuse = get_user_button(id) & IN_USE
+new attack = get_user_button(id) & IN_ATTACK
+new oldinuse = get_user_oldbutton(id) & IN_USE
+new oldattack = get_user_oldbutton(id) & IN_ATTACK
+
+if((inuse) && (oldinuse) && (!E_KeyPress_Delay[id]))
+return FMRES_IGNORED
+
+if(buttons & IN_USE)
+buttons &= ~IN_USE
+
+if((buttons & IN_ATTACK) && Bazooka_Active[id])
+buttons &= ~IN_ATTACK
+
+
+set_uc(uc_handle, UC_Buttons, buttons)
+
+if((inuse) && !(oldinuse)) {
+
+new data2[1]
+
+data2[0] = id
+
+E_KeyPress_Delay[id] = true
+
+set_task(0.2,"delay", id+2023, data2, 1)
+	
+if (Bazooka_Active[id])
+Bazooka_Active[id] = false
+
+else 
+Bazooka_Active[id] = true
+
+Event_CurWeapon(id)
+
+}
+
+else if (attack && !oldattack && Bazooka_Active[id])
+{
+
+if (Rocket_Mode[id] == 1 && Bazooka_Ammo1[id] <= 0)
+{
+		
+emit_sound(id, CHAN_WEAPON, "weapons/dryfire1.wav", VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+
+return FMRES_SUPERCEDE
+
+}
+
+
+if (Allow_Shooting[id] && (User_Control[id] == 0)) {
+
+remove_task (id+2023) 
+
+Allow_Shooting[id] = false
+
+entity_set_int(id, EV_INT_weaponanim, 3)
+
+fire_rocket(id)
+
+}
+
+}
+
+
+}
+
+if (User_Control[id] > 0) {
+
+new RocketEnt = User_Control[id]
+
+if (is_valid_ent(RocketEnt)) {
+
+new Float:Velocity[3]
+new Float:NewAngle[3]
+
+VelocityByAim(id, 500, Velocity)
+
+entity_set_vector(RocketEnt, EV_VEC_velocity, Velocity)
+
+entity_get_vector(id, EV_VEC_v_angle, NewAngle)
+entity_set_vector(RocketEnt, EV_VEC_angles, NewAngle)
+
+}
+
+}
+
+return FMRES_HANDLED
+
+}
+
+public cmd_BuyBazooka (id)
+{
+
+if(!is_user_alive(id)) 
+{
+ColorChat(id, GREY, "^4[CS]^1 You should alive.")
+return PLUGIN_HANDLED	
+}
+
+else if(has_shield(id))
+{
+ColorChat(id, GREY, "^4[CS]^1 Drop^4 shield^1 to use this weapon.")
+return PLUGIN_HANDLED	
+}
+
+else if(get_cvar_num("RPG_active") == 0)
+{
+ColorChat(id, GREY, "^4[CS]^1 You^4 can't^1 use this right now.")	
+return PLUGIN_HANDLED	
+}
+
+else if(Has_Bazooka[id])
+{
+Bazooka_Ammo1[id]++
+ColorChat(id, GREY, "^4[CS]^1 You have^4 %d rocket", Bazooka_Ammo1[id])
+return PLUGIN_CONTINUE	
+}	
+
+else
+{
+
+give_item(id, "weapon_knife")	
+Has_Bazooka[id] = true
+Allow_Shooting[id] = true
+Bazooka_Ammo1[id] = 2	
+new temp[2], weaponID = get_user_weapon(id, temp[0], temp[1])		
+if(weaponID == CSW_KNIFE)
+{	
+Bazooka_Active[id] = true
+Event_CurWeapon(id)	
+entity_set_int(id, EV_INT_weaponanim, 1)		
+}	
+else 
+{
+Bazooka_Active[id] = true
+client_cmd(id, "weapon_knife")	
+}
+
+emit_sound(id, CHAN_WEAPON, "items/gunpickup2.wav", VOL_NORM, ATTN_NORM, 0, PITCH_NORM)
+
+}
+
+return PLUGIN_HANDLED
+
+}
+
+public Event_CurWeapon (id) {
+
+if(!is_user_alive(id)) 
+return PLUGIN_CONTINUE
+
+new weaponid, clip, ammo
+
+weaponid = get_user_weapon(id, clip, ammo)
+
+if ((weaponid == CSW_KNIFE) && (Bazooka_Active[id])) {
+
+entity_set_string(id, EV_SZ_viewmodel, "models/v_rpg.mdl")
+entity_set_string(id, EV_SZ_weaponmodel, "models/p_rpg.mdl")
+entity_set_int(id, EV_INT_weaponanim, 1)
+emit_sound(id, CHAN_ITEM, "common/wpn_select.wav", VOL_NORM, ATTN_NORM, 0, PITCH_NORM)	
+
+return PLUGIN_HANDLED
+
+}
+
+if ((weaponid == CSW_KNIFE) && (!Bazooka_Active[id])) {
+
+if(has_shield(id)) {
+
+entity_set_string(id, EV_SZ_viewmodel, "models/shield/v_shield_knife.mdl")
+entity_set_string(id, EV_SZ_weaponmodel, "models/shield/p_shield_knife.mdl")
+
+}
+
+else {
+
+entity_set_string(id, EV_SZ_viewmodel, "models/v_knife.mdl")
+entity_set_string(id, EV_SZ_weaponmodel, "models/p_knife.mdl")
+
+}
+
+emit_sound(id, CHAN_ITEM, "weapons/knife_deploy1.wav", VOL_NORM, ATTN_NORM, 0, PITCH_NORM)	
+entity_set_int(id, EV_INT_weaponanim, 3)
+
+return PLUGIN_HANDLED
+
+}
+
+if(Has_Bazooka[id] && Bazooka_Active[id])
+Bazooka_Active[id] = false
+
+return PLUGIN_CONTINUE
+
+}
+
+public Event_DeathMsg ()
+{
+
+new id = read_data(2)
+
+if(!is_user_connected(id) || !Has_Bazooka[id])
+return PLUGIN_CONTINUE
+
+drop_rpglancher(id)
+
+return PLUGIN_CONTINUE
+
+}
+
+public Event_WeaponDrop (id)
+{
+
+if(!is_user_alive(id) || !Has_Bazooka[id] || !Bazooka_Active[id])
+return PLUGIN_CONTINUE
+
+new weaponid, clip, ammo
+weaponid = get_user_weapon(id, clip, ammo)
+
+if (weaponid == CSW_KNIFE)
+{
+
+drop_rpglancher(id)
+
+}
+
+return PLUGIN_HANDLED
+
+}

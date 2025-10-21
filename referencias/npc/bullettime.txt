@@ -1,0 +1,345 @@
+/* AMX MOD X
+*   Advanced Bullet Time - bullettime.sma
+*
+* (c) Copyright 2006 by Knekter
+*
+* This file is provided as is (no warranties)
+*/
+
+#include <amxmodx>
+#include <amxmisc>
+#include <fakemeta>
+#include <fakemeta_util>
+#include <cstrike>
+#include <fun>
+
+static const PLUGIN_NAME[] = "Advanced Bullet Time";
+static const PLUGIN_VERSION[] = "1.0.0";
+static const PLUGIN_AUTHOR[] = "Knekter";
+
+// Command Variables
+new g_cvar_bulletspeed;
+new g_cvar_sniperspeed;
+new g_cvar_red;
+new g_cvar_green;
+new g_cvar_blue;
+
+// Bullet time Variable
+new bool:g_bullet_time = true;
+
+#define MAX_PLAYERS 32
+new bool:g_restart_attempt[MAX_PLAYERS + 1];
+
+new g_last_weapon[MAX_PLAYERS + 1];
+new g_last_clip[MAX_PLAYERS + 1];
+
+new g_sprite_bullet;
+
+public plugin_precache()
+{
+	precache_model("models/shell.mdl");
+	g_sprite_bullet = precache_model("sprites/zbeam4.spr");
+}
+
+public plugin_init()
+{
+	register_plugin(PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
+	register_concmd("bt_toggle", "clcmd_bullettime", ADMIN_KICK, "<1/on | 0/off>");
+	register_clcmd("fullupdate", "clcmd_fullupdate");
+
+	g_cvar_bulletspeed = register_cvar("bt_bulletspeed", "800");
+	g_cvar_sniperspeed = register_cvar("bt_sniperspeed", "2000");
+	g_cvar_red = register_cvar("bt_red", "193");
+	g_cvar_green = register_cvar("bt_green", "193");
+	g_cvar_blue = register_cvar("bt_blue", "191");
+
+	register_event("ResetHUD", "event_reset_hud", "be");
+	register_event("TextMsg", "event_restart_attempt", "a", "2=#Game_will_restart_in");
+	register_event("CurWeapon", "event_weaponfire", "be", "1=1", "2!4", "2!6", "2!9", "2!25", "2!29");
+
+	register_forward(FM_Touch, "forward_touch");
+}
+
+public clcmd_bullettime(id, level, cid)
+{
+	if (!cmd_access(id, level, cid, 2))
+		return PLUGIN_HANDLED;
+
+	static arg[3];
+	read_argv(1, arg, sizeof(arg));
+
+	if ((equali(arg, "on") || equali(arg, "1")) && g_bullet_time != true)
+	{
+		util_hitzones(0);
+		client_print(0, print_chat, "[AMXX] Bullet time has currently been enabled!");
+
+		g_bullet_time = true;
+	}
+	else if ((equali(arg, "off") || equali(arg, "0")) && g_bullet_time != false)
+	{
+		util_hitzones(255);
+		client_print(0, print_chat, "[AMXX] Bullet time has currently been disabled!");
+
+		g_bullet_time = false;
+	}
+
+	return PLUGIN_HANDLED;
+}
+
+public clcmd_fullupdate()
+{
+	// Block those bastards
+	return PLUGIN_HANDLED;
+}
+
+public event_reset_hud(id)
+{
+	if (g_restart_attempt[id])
+	{
+		g_restart_attempt[id] = false;
+		return;
+	}
+
+	event_player_spawn(id);
+}
+
+public event_restart_attempt()
+{
+	new num, p;
+	static players[32];
+	get_players(players, num, "a");
+
+	for (p = 0; p < num; ++p)
+		g_restart_attempt[players[p]] = true;
+}
+
+public event_player_spawn(id)
+{
+	if (g_bullet_time == false)
+		return;
+
+	set_user_hitzones(id, 0, 0);
+	set_user_hitzones(0, id, 0);
+
+	return;
+}
+
+public event_weaponfire(id)
+{
+	if (g_bullet_time == false)
+		return;
+
+	new weapon = read_data(2);
+	new clip = read_data(3);
+
+	if (g_last_weapon[id] == 0)
+		g_last_weapon[id] = weapon;
+
+	if ((g_last_clip[id] > clip) && (g_last_weapon[id] == weapon))
+	{
+		new entity = fm_create_entity("info_target");
+
+		if (entity > 0)
+		{
+			new Float:angle[3], Float:origin[3], Float:aimvec[3];
+			new Float:minbox[3] = {-1.0, -1.0, -1.0};
+			new Float:maxbox[3] = {1.0, 1.0, 1.0};
+
+			pev(id, pev_origin, origin);
+			origin[2] += 12.0;
+
+			set_pev(entity, pev_classname, "bullet_x");
+			fm_entity_set_model(entity, "models/shell.mdl");
+
+			static weaponname[32];
+			get_weaponname(weapon, weaponname, sizeof(weaponname));
+			set_pev(entity, pev_targetname, weaponname);
+
+			pev(id, pev_v_angle, angle);
+
+			fm_entity_set_size(entity, minbox, maxbox);
+			fm_entity_set_origin(entity, origin);
+
+			set_pev(entity, pev_angles, angle);
+			set_pev(entity, pev_v_angle, angle);
+
+			set_pev(entity, pev_effects, 2);
+			set_pev(entity, pev_solid, SOLID_BBOX);
+			set_pev(entity, pev_movetype, MOVETYPE_FLY);
+			set_pev(entity, pev_owner, id);
+
+			if (weapon != CSW_SCOUT && weapon != CSW_SG550 && weapon != CSW_AWP && weapon != CSW_G3SG1)
+				fm_velocity_by_aim(id, get_pcvar_num(g_cvar_bulletspeed), aimvec);
+			else
+				fm_velocity_by_aim(id, get_pcvar_num(g_cvar_sniperspeed), aimvec);
+
+			set_pev(entity, pev_velocity, aimvec);
+
+			message_begin(MSG_BROADCAST, SVC_TEMPENTITY);
+			write_byte(TE_BEAMFOLLOW);
+			write_short(entity);			// Entity to follow
+			write_short(g_sprite_bullet);		// Sprite index
+			write_byte(10);				// Life
+			write_byte(2);				// Line width
+			write_byte(get_pcvar_num(g_cvar_red));	// Red
+			write_byte(get_pcvar_num(g_cvar_green));// Green
+			write_byte(get_pcvar_num(g_cvar_blue));	// Blue
+			write_byte(120);			// Brightness
+			message_end();
+		}
+	}
+
+	g_last_weapon[id] = weapon;
+	g_last_clip[id] = clip;
+}
+
+public forward_touch(toucher, touched)
+{
+	if (g_bullet_time == false)
+		return PLUGIN_HANDLED;
+
+	if (toucher > 0 && touched >= 0)
+	{
+		static classname[32];
+		static classname2[32];
+		pev(toucher, pev_classname, classname, sizeof(classname));
+		pev(touched, pev_classname, classname2, sizeof(classname2));
+
+		if(equal(classname, "bullet_x"))
+		{
+			new attacker = pev(toucher, pev_owner);
+
+			if (is_user_connected(touched) && equal(classname2, "player"))
+			{
+				static targetname[32];
+				pev(touched, pev_targetname, targetname, sizeof(targetname));
+
+				util_damage(attacker, touched, targetname);
+			}
+			else if (equal(classname2, "func_breakable"))
+				fm_force_use(attacker, touched);
+
+			fm_remove_entity(toucher);
+		}
+	}
+
+	return PLUGIN_HANDLED;
+}
+
+util_damage(attacker, victim, weapon[])
+{
+	new damage = random_num(15, 30);
+
+	if (equal(weapon[7], "scout") || equal(weapon[7], "sg550") || equal(weapon[7], "g3sg1"))
+		damage = random_num(45, 75);
+	else if (equal(weapon[7], "awp"))
+		damage = random_num(90, 120);
+
+	if (get_user_health(victim) - damage <= 0)
+		util_kill(attacker, victim, weapon);
+	else if (get_user_team(attacker) != get_user_team(victim) || (get_user_team(attacker) == get_user_team(victim) && get_cvar_num("mp_friendlyfire") == 1))
+	{
+		fm_fakedamage(victim, weapon, float(damage), DMG_BULLET);
+
+		static origin[3];
+		get_user_origin(victim, origin, 0);
+
+		message_begin(MSG_ONE, get_user_msgid("Damage"), {0, 0, 0}, victim);
+		write_byte(0);		 // Damage save
+		write_byte(damage);	 // Damage take
+		write_long(DMG_BULLET);	 // Damage type
+		write_coord(origin[0]);	 // X
+		write_coord(origin[1]);	 // Y
+		write_coord(origin[2]);	 // Z
+		message_end();
+
+		if (get_user_team(attacker) == get_user_team(victim))
+		{
+			static name[32];
+			get_user_name(attacker, name, sizeof(name));
+
+			client_print(0, print_chat, "%s attacked a teammate", name);
+		}
+	}
+}
+
+util_kill(killer, victim, weapon[])
+{
+	if (get_user_team(killer) != get_user_team(victim))
+	{
+		user_silentkill(victim);
+		make_deathmsg(killer, victim, 0, weapon);
+
+		set_user_frags(killer, get_user_frags(killer) + 1);
+
+		new money = cs_get_user_money(killer) + 300;
+		if (money >= 16000)
+			cs_set_user_money(killer, 16000);
+		else
+			cs_set_user_money(killer, money, 1);
+	}
+	else
+	{
+		if (get_cvar_num("mp_friendlyfire") == 1)
+		{
+			user_silentkill(victim);
+			make_deathmsg(killer, victim, 0, weapon);
+
+			set_user_frags(killer, get_user_frags(killer) - 1);
+
+			new money = cs_get_user_money(killer) - 3300;
+			if (money <= 0)
+				cs_set_user_money(killer, 0);
+			else
+				cs_set_user_money(killer, money, 1);
+		}
+	}
+
+	message_begin(MSG_BROADCAST, get_user_msgid("ScoreInfo"));
+	write_byte(killer);			 // Destination
+	write_short(get_user_frags(killer));	 // Frags
+	write_short(cs_get_user_deaths(killer)); // Deaths
+	write_short(0);				 // Player class
+	write_short(get_user_team(killer));	 // Team
+	message_end();
+
+	message_begin(MSG_BROADCAST, get_user_msgid("ScoreInfo"));
+	write_byte(victim);			 // Destination
+	write_short(get_user_frags(victim));	 // Frags
+	write_short(cs_get_user_deaths(victim)); // Deaths
+	write_short(0);				 // Player class
+	write_short(get_user_team(victim));	 // Team
+	message_end();
+
+	static kname[32];
+	static vname[32];
+	static kteam[10];
+	static vteam[10];
+	static kauthid[32];
+	static vauthid[32];
+
+	get_user_name(killer, kname, sizeof(kname));
+	get_user_team(killer, kteam, sizeof(kteam));
+	get_user_authid(killer, kauthid, sizeof(kauthid));
+
+	get_user_name(victim, vname, sizeof(vname));
+	get_user_team(victim, vteam, sizeof(vteam));
+	get_user_authid(victim, vauthid, sizeof(vauthid));
+
+	log_message("^"%s<%d><%s><%s>^" killed ^"%s<%d><%s><%s>^" with ^"%s^"", 
+	kname, get_user_userid(killer), kauthid, kteam, 
+ 	vname, get_user_userid(victim), vauthid, vteam, weapon);
+}
+
+util_hitzones(value)
+{
+	new num, p;
+	static players[32];
+	get_players(players, num, "a");
+
+	for (p = 0; p < num; ++p)
+	{
+		set_user_hitzones(players[p], 0, value);
+		set_user_hitzones(0, players[p], value);
+	}
+}

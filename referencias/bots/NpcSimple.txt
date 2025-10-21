@@ -1,0 +1,458 @@
+/* 本插件由 AMXX-Studio 中文版自动生成*/
+/* UTF-8 func by www.DT-Club.net */
+
+#include <amxmodx>
+#include <fakemeta>
+#include <hamsandwich>
+#include <xs>
+#include <NavigationSystem>
+
+enum Attribute
+{
+	AttIntStart,		// int value start ( like pev_iuser1/pev_solid/pev_movetype )
+	Att_Target,
+	Att_IUser1,
+	Att_IUser2,
+	AttIntEnd,		// int value end
+	AttFlStart,		// float value start ( like pev_fuser1/pev_health/pev_takedamage )
+	Att_FrameTimer,
+	Att_FUser1,
+	Att_FUser2,
+	AttFlEnd,		// float value end
+	AttVecStart,		// float[3] start ( like pev_vuser1/pev_angles/pev_velocity )
+	Att_VUser1,
+	Att_VUser2,
+	AttVecEnd		// float[3] end
+}
+
+
+new gMaxPlayers
+new gClassNameId_InfoTarget, gClassNameId_NPC
+new gSprId_NPC
+new gSprFrameCount_NPC
+public plugin_precache()
+{
+	gMaxPlayers = get_maxplayers()
+	
+	gClassNameId_InfoTarget	= engfunc(EngFunc_AllocString, "info_target")
+	gClassNameId_NPC	= engfunc(EngFunc_AllocString, "monster_NPC")
+	
+	gSprId_NPC = precache_model("sprites/poison.spr")
+	gSprFrameCount_NPC = engfunc(EngFunc_ModelFrames, gSprId_NPC)
+	
+	Npc_Create()
+}
+
+new Array:gArray_NodeDucking, Array:gArray_NodePoint, Array:gArray_NodeAbsMin, Array:gArray_NodeAbsMax, Array:gArray_NodeNormal
+new Array:gArray_NodeStart, Array:gArray_NodeEnd, Array:gArray_NodeFlags, Array:gArray_NodeTop, Array:gArray_NodeDistance
+public NavSys_NodeLoaded(id, 
+Array:arrayNodeDucking, Array:arrayNodePoint, Array:arrayNodeAbsMin, Array:arrayNodeAbsMax, Array:arrayNodeNormal, 
+Array:arrayNodeStart, Array:arrayNodeEnd, Array:arrayNodeFlags, Array:arrayNodeTop, Array:arrayNodeDistance)
+{
+	gArray_NodeDucking = arrayNodeDucking
+	gArray_NodePoint = arrayNodePoint
+	gArray_NodeAbsMin = arrayNodeAbsMin
+	gArray_NodeAbsMax = arrayNodeAbsMax
+	gArray_NodeNormal = arrayNodeNormal
+	gArray_NodeStart = arrayNodeStart
+	gArray_NodeEnd = arrayNodeEnd
+	gArray_NodeFlags = arrayNodeFlags
+	gArray_NodeTop = arrayNodeTop
+	gArray_NodeDistance = arrayNodeDistance
+}
+public NavSys_NodeSaved(id, 
+Array:arrayNodeDucking, Array:arrayNodePoint, Array:arrayNodeAbsMin, Array:arrayNodeAbsMax, Array:arrayNodeNormal, 
+Array:arrayNodeStart, Array:arrayNodeEnd, Array:arrayNodeFlags, Array:arrayNodeTop, Array:arrayNodeDistance)
+{
+	gArray_NodeDucking = arrayNodeDucking
+	gArray_NodePoint = arrayNodePoint
+	gArray_NodeAbsMin = arrayNodeAbsMin
+	gArray_NodeAbsMax = arrayNodeAbsMax
+	gArray_NodeNormal = arrayNodeNormal
+	gArray_NodeStart = arrayNodeStart
+	gArray_NodeEnd = arrayNodeEnd
+	gArray_NodeFlags = arrayNodeFlags
+	gArray_NodeTop = arrayNodeTop
+	gArray_NodeDistance = arrayNodeDistance
+}
+
+public plugin_init()
+{
+	register_plugin("NavSys_SimpleNpc", "220410", "251020worm")
+	
+	RegisterHam(Ham_Think, "info_target", "@Npc_Think_Post", 1)
+}
+
+@Npc_Think_Post(npc)
+{
+	if (pev(npc, pev_classname) != gClassNameId_NPC) return
+	
+	new Float:gameTime = get_gametime()
+	
+	if (pev(npc, pev_deadflag) == DEAD_DEAD)
+	{
+		if (!Npc_TrySpawn(npc))
+		{
+			set_pev(npc, pev_nextthink, gameTime + 2.0)
+			return
+		}
+	}
+	
+	set_pev(npc, pev_nextthink, 0.01)
+	
+	Npc_SetCrouch(npc, false)
+	
+	if (Float:Attribute_Get(npc, Att_FrameTimer) <= gameTime)
+	{
+		Attribute_Set(npc, Att_FrameTimer, gameTime + 0.08)
+		set_pev(npc, pev_frame, float((pev(npc, pev_frame) + 1) % gSprFrameCount_NPC))
+	}
+	
+	new target = Attribute_Get(npc, Att_Target)
+	if (target)
+	{
+		if (is_user_alive(target)) { Npc_Follow(npc); return; }
+	}
+	
+	Npc_TargetUpdate(npc)
+}
+
+Npc_Create()
+{
+	new npc = engfunc(EngFunc_CreateNamedEntity, gClassNameId_InfoTarget)
+	
+	set_pev_string(npc, pev_classname, gClassNameId_NPC)
+	set_pev(npc, pev_modelindex, gSprId_NPC)
+	set_pev(npc, pev_nextthink, 2.0)
+	
+	new Array:arrayAttributes, Array:arrayInt, Array:arrayFloat, Array:arrayVector
+	arrayAttributes = ArrayCreate(1, 3)
+	set_pev(npc, pev_iuser1, arrayAttributes)					// NPC specific attributes
+	
+	arrayInt	= ArrayCreate(1, any:(AttIntEnd - AttIntStart) - 1)		// NPC specific attributes ( int value )
+	arrayFloat	= ArrayCreate(1, any:(AttFlEnd - AttFlStart) - 1)		// NPC specific attributes ( float value )
+	arrayVector	= ArrayCreate(3, any:(AttVecEnd - AttVecStart) - 1)		// NPC specific attributes ( float[3] )
+	ArrayPushCell(arrayAttributes, arrayInt)					// Initialize memory ( int value  )
+	ArrayPushCell(arrayAttributes, arrayFloat)					// Initialize memory ( float value )
+	ArrayPushCell(arrayAttributes, arrayVector)					// Initialize memory ( float[3] )
+	
+	new i
+	for (i = any:AttIntStart + 1;	i < any:AttIntEnd;	i++)	ArrayPushCell(arrayInt, 0)			// int default value
+	for (i = any:AttFlStart + 1;	i < any:AttFlEnd;	i++)	ArrayPushCell(arrayFloat, 0.0)			// float default value
+	for (i = any:AttVecStart + 1;	i < any:AttVecEnd;	i++)	ArrayPushArray(arrayVector, {0.0, 0.0, 0.0})	// float[3] default value
+	
+	Npc_Disable(npc)
+}
+Npc_Disable(npc)
+{
+	set_pev(npc, pev_effects, EF_NODRAW)
+	set_pev(npc, pev_solid, SOLID_NOT)
+	set_pev(npc, pev_movetype, MOVETYPE_NONE)
+	set_pev(npc, pev_deadflag, DEAD_DEAD)
+	set_pev(npc, pev_maxspeed, 0.0)
+	set_pev(npc, pev_rendermode, kRenderNormal)
+	set_pev(npc, pev_renderfx, kRenderFxNone)
+	set_pev(npc, pev_renderamt, 0.0)
+	set_pev(npc, pev_scale, 0.0)
+	engfunc(EngFunc_SetSize, npc, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 })
+}
+Npc_Enable(npc)
+{
+	set_pev(npc, pev_effects, 0)
+	set_pev(npc, pev_solid, SOLID_TRIGGER)
+	set_pev(npc, pev_movetype, MOVETYPE_PUSHSTEP)
+	set_pev(npc, pev_deadflag, DEAD_NO)
+	set_pev(npc, pev_maxspeed, 200.0)
+	set_pev(npc, pev_rendermode, kRenderGlow)
+	set_pev(npc, pev_renderfx, kRenderFxNoDissipation)
+	set_pev(npc, pev_renderamt, 255.0)
+	set_pev(npc, pev_scale, 0.66)
+	// It is recommended to use the same size as the player ( Upright: 32, 32, 72 / Crouch: 32 32 36 )
+	engfunc(EngFunc_SetSize, npc, { -16.0, -16.0, -36.0 }, { 16.0, 16.0, 36.0 })
+}
+bool:Npc_TrySpawn(npc)
+{
+	new dontSpawn
+	for (dontSpawn = 1; dontSpawn <= gMaxPlayers; dontSpawn++)
+	{
+		if (is_user_alive(dontSpawn)) { dontSpawn = 0; break; }
+	}
+	if (dontSpawn) return false
+	
+	new rand, iNode
+	new nodeNums = ArraySize(gArray_NodeDucking)
+	new Array:arrayNodeIndex = ArrayCreate(1, nodeNums)
+	for (; iNode < nodeNums; iNode++)
+	{
+		// Do not collect small nodes (For the sake of upright humanoid NPC)
+		if (ArrayGetCell(gArray_NodeDucking, iNode)) continue
+		ArrayPushCell(arrayNodeIndex, iNode)
+	}
+	
+	nodeNums = ArraySize(arrayNodeIndex)
+	
+	new bool:spawnAllowed
+	new Float:spawnPoint[3]
+	while (nodeNums)
+	{
+		rand = random(nodeNums)
+		iNode = ArrayGetCell(arrayNodeIndex, rand)
+		
+		ArrayDeleteItem(arrayNodeIndex, rand)
+		nodeNums--
+		
+		ArrayGetArray(gArray_NodePoint, iNode, spawnPoint)
+		if (IsHullVacant(spawnPoint)) { spawnAllowed = true; break; }
+	}
+	ArrayDestroy(arrayNodeIndex)
+	
+	if (!spawnAllowed)
+	{
+		new Float:spawnPos[6]
+		new Array:arraySpawnPos = NavSys_GetSpawnPos()	// Do not destroy this array
+		for (new i = ArraySize(arraySpawnPos) - 1; 0 <= i; i--)
+		{
+			ArrayGetArray(arraySpawnPos, i, spawnPos)
+			spawnPoint[0] = spawnPos[0]
+			spawnPoint[1] = spawnPos[1]
+			spawnPoint[2] = spawnPos[2]
+			if (IsHullVacant(spawnPoint)) { spawnAllowed = true; break; }
+		}
+	}
+	
+	if (spawnAllowed) { Npc_Enable(npc); set_pev(npc, pev_origin, spawnPoint); }
+	return spawnAllowed
+}
+Npc_TargetUpdate(npc)
+{
+	new Float:origin[3], Float:goal[3]
+	pev(npc, pev_origin, origin)
+	
+	new target
+	new Float:dist, Float:lastDist, Float:fraction
+	for (new i = 1; i <= gMaxPlayers; i++)
+	{
+		if (!is_user_alive(i)) continue
+		
+		pev(i, pev_origin, goal)
+		
+		dist = get_distance_f(origin, goal)
+		
+		engfunc(EngFunc_TraceLine, origin, goal, IGNORE_MONSTERS, npc, 0)
+		get_tr2(0, TR_flFraction, fraction)
+		if (fraction < 1.0 && get_tr2(0, TR_pHit) != i) dist += 500.0
+		
+		if (dist < lastDist || !target) { lastDist = dist; target = i; }
+	}
+	
+	new oldTarget = Attribute_Get(npc, Att_Target)
+	if (oldTarget == target) return
+	
+	Attribute_Set(npc, Att_Target, target)
+}
+Npc_Follow(npc)
+{
+	new target = Attribute_Get(npc, Att_Target)
+	
+	new Float:origin[3]
+	pev(npc, pev_origin, origin)	// Humanoid NPCs should use coordinates 36 units above the foot when standing upright. When crouching, use coordinates 18 units above the foot.It will make the path information more accurate
+	new iNodeOrigin = NavBox_GetNode(origin)
+	
+	if (iNodeOrigin < 0)		// The map has no nav nodes
+	{
+		client_print(target, print_center, "iNodeOrigin < 0, iNodeOrigin == %d", iNodeOrigin)
+		return
+	}
+	
+	new Float:goal[3]
+	pev(target, pev_origin, goal)	// target is human
+	new iNodeGoal = NavBox_GetNodeNearest(goal)
+	
+	if (iNodeOrigin == iNodeGoal)	// NPC is very close to the target
+	{
+		client_print(target, print_center, "iNodeOrigin == iNodeGoal")
+		return
+	}
+	
+	new iWaypointFinal
+	new Array:arrayWaypoint = NavSys_Pathfinding(iNodeOrigin, iNodeGoal, iWaypointFinal, 0)
+	
+	// The target is in an unreachable area
+	if (iWaypointFinal == -2)
+	{
+		client_print(target, print_center, "iWaypointFinal == -2")
+		ArrayDestroy(arrayWaypoint)
+		return
+	}
+	// The fourth parameter of "navsys_pathbinding" is not -1, so the target may not be found
+	if (iWaypointFinal == -1)
+	{
+		client_print(target, print_center, "iWaypointFinal == -1")
+		// You can save "arrayWaypoint" and "iNodeGoal", and use "NavSys_Pathfinding2" at the next frame to keep pathfinding
+		ArrayDestroy(arrayWaypoint)
+		return
+	}
+	
+	new waypoint[7]
+	NavSys_GetWaypointSecond(arrayWaypoint, iWaypointFinal, waypoint)	// If the NPC is not at the starting point, use "NavSys_GetWaypointPathInfo" to find the next waypoint
+	
+	new iNodeCurrent = waypoint[4]
+	new iNodeNext = waypoint[0]
+	new iPath = waypoint[6]
+	new PathFlags:flags, Float:height, Float:dest[3]
+	NavNode_GetPathCoord2(iNodeCurrent, iNodeNext, iPath, flags, height, dest)	// "NavNode_GetPathCoord" or "NavNode_GetPathCoord2" will tell you more about the current path
+	
+	ArrayDestroy(arrayWaypoint)
+	
+	new Float:oldVelocity[3]
+	pev(npc, pev_velocity, oldVelocity)
+	new Float:velocity[3]
+	velocity[0] = dest[0] - origin[0]
+	velocity[1] = dest[1] - origin[1]
+	new Float:length = floatsqroot(velocity[0] * velocity[0] + velocity[1] * velocity[1])
+	new Float:maxSpeed
+	pev(npc, pev_maxspeed, maxSpeed)
+	velocity[0] = velocity[0] * maxSpeed / length
+	velocity[1] = velocity[1] * maxSpeed / length
+	
+	if (pev(npc, pev_flags) & FL_ONGROUND)
+	{
+		if (0.0 < height) velocity[2] = floatsqroot(45.0 * 2.0 * 800.0)		// set 45.0 to jump like a player
+		else velocity[2] = 0.0
+	}
+	else
+	{
+		velocity[2] = oldVelocity[2]
+	}
+	set_pev(npc, pev_velocity, velocity)
+	
+	if (flags & PF_CrouchRun || 45.0 < height) Npc_SetCrouch(npc, true, 45.0 < height)
+	
+	ArrayGetArray(gArray_NodePoint, iNodeOrigin, dest)
+	SendMsg_BeamPoints(origin, dest, 1, 10, 0, 255, 0, 0)
+	ArrayGetArray(gArray_NodePoint, iNodeGoal, dest)
+	SendMsg_BeamPoints(goal, dest, 1, 10, 0, 255, 255, 255)
+	SendMsg_BeamPoints(origin, goal, 1, 10, 0, 255, 255, 0)
+	pev(npc, pev_mins, dest)
+	client_print(0, print_center, "distance : %.1f", get_distance_f(origin, goal))
+}
+
+Npc_SetCrouch(npc, bool:on, bool:jumping = false)
+{
+	new flags = pev(npc, pev_flags)
+	if (on)
+	{
+		if (flags & FL_DUCKING) return
+		
+		set_pev(npc, pev_flags, flags | FL_DUCKING)
+		engfunc(EngFunc_SetSize, npc, { -16.0, -16.0, -18.0 }, { 16.0, 16.0, 18.0 })
+		if (flags & FL_ONGROUND && !jumping)
+		{
+			new Float:vecSrc[3], Float:vecDest[3]
+			pev(npc, pev_origin, vecSrc)
+			vecDest[0] = vecSrc[0]
+			vecDest[1] = vecSrc[1]
+			vecDest[2] = vecSrc[2] - 18.0
+			engfunc(EngFunc_TraceHull, vecSrc, vecDest, DONT_IGNORE_MONSTERS, HULL_HEAD, npc, 0)
+			get_tr2(0, TR_vecEndPos, vecDest)
+			set_pev(npc, pev_origin, vecDest)
+		}
+		return
+	}
+	
+	if (flags & FL_DUCKING == 0) return
+	if (flags & FL_ONGROUND == 0) return
+	
+	new Float:origin[3]
+	pev(npc, pev_origin, origin)
+	origin[2] += 18.0
+	if (IsHullVacant(origin))
+	{
+		set_pev(npc, pev_flags, flags & ~FL_DUCKING)
+		engfunc(EngFunc_SetSize, npc, { -16.0, -16.0, -36.0 }, { 16.0, 16.0, 36.0 })
+		
+		set_pev(npc, pev_origin, origin)
+	}
+}
+
+any:Attribute_Get(npc, Attribute:att, any:...)
+{
+	if (AttIntStart < att < AttIntEnd) return ArrayGetCell(ArrayGetCell(any:pev(npc, pev_iuser1), 0), any:(att - AttIntStart) - 1)
+	if (AttFlStart < att < AttFlEnd) return ArrayGetCell(ArrayGetCell(any:pev(npc, pev_iuser1), 1), any:(att - AttFlStart) - 1)
+	if (AttVecStart < att < AttVecEnd)
+	{
+		new vector[3]
+		ArrayGetArray(ArrayGetCell(any:pev(npc, pev_iuser1), 2), any:(att - AttVecStart) - 1, vector)
+		setarg(2, 0, vector[0])
+		setarg(2, 1, vector[1])
+		setarg(2, 2, vector[2])
+	}
+	return 0
+}
+Attribute_Set(npc, Attribute:att, any:...)
+{
+	if (AttIntStart < att < AttIntEnd) ArraySetCell(ArrayGetCell(any:pev(npc, pev_iuser1), 0), any:(att - AttIntStart) - 1, getarg(2))
+	if (AttFlStart < att < AttFlEnd) ArraySetCell(ArrayGetCell(any:pev(npc, pev_iuser1), 1), any:(att - AttFlStart) - 1, getarg(2))
+	if (AttVecStart < att < AttVecEnd)
+	{
+		new vector[3]
+		vector[0] = getarg(2, 0)
+		vector[1] = getarg(2, 1)
+		vector[2] = getarg(2, 2)
+		ArraySetArray(ArrayGetCell(any:pev(npc, pev_iuser1), 2), any:(att - AttVecStart) - 1, vector)
+	}
+}
+// You need to use this function to destroy custom attributes before deleting NPC
+Attribute_Destroy(npc)
+{
+	new Array:arrayAttributes = any:pev(npc, pev_iuser1)
+	new Array:arrayInt = ArrayGetCell(arrayAttributes, 0)
+	new Array:arrayFloat = ArrayGetCell(arrayAttributes, 1)
+	new Array:arrayVector = ArrayGetCell(arrayAttributes, 2)
+	ArrayDestroy(arrayInt)
+	ArrayDestroy(arrayFloat)
+	ArrayDestroy(arrayVector)
+	ArrayDestroy(arrayAttributes)
+}
+
+stock bool:IsHullStucked(ignoreEnt, const Float:origin[3], hull = HULL_HUMAN)
+{
+	engfunc(EngFunc_TraceHull, origin, origin, DONT_IGNORE_MONSTERS, hull, ignoreEnt, 0)
+	if (!get_tr2(0, TR_InOpen) || get_tr2(0, TR_StartSolid) || get_tr2(0, TR_AllSolid)) return true
+	return false
+}
+stock bool:IsMonsterStucked(ent, const Float:origin[3])
+{
+	engfunc(EngFunc_TraceMonsterHull, ent, origin, origin, DONT_IGNORE_MONSTERS, ent, 0)
+	if (!get_tr2(0, TR_InOpen) || get_tr2(0, TR_StartSolid) || get_tr2(0, TR_AllSolid)) return true
+	return false
+}
+stock bool:IsHullVacant(const Float:origin[3], hull = HULL_HUMAN)
+{
+	engfunc(EngFunc_TraceHull, origin, origin, DONT_IGNORE_MONSTERS, hull, 0, 0)
+	if (!get_tr2(0, TR_InOpen) || get_tr2(0, TR_AllSolid) || get_tr2(0, TR_StartSolid)) return false
+	return true
+}
+stock SendMsg_BeamPoints(const Float:p1[3], const Float:p2[3], life, width, noise, r, g, b)
+{
+	engfunc(EngFunc_MessageBegin, MSG_PVS, SVC_TEMPENTITY, p2, 0)
+	write_byte(TE_BEAMPOINTS)
+	engfunc(EngFunc_WriteCoord, p1[0])
+	engfunc(EngFunc_WriteCoord, p1[1])
+	engfunc(EngFunc_WriteCoord, p1[2])
+	engfunc(EngFunc_WriteCoord, p2[0])
+	engfunc(EngFunc_WriteCoord, p2[1])
+	engfunc(EngFunc_WriteCoord, p2[2])
+	write_short(engfunc(EngFunc_ModelIndex, "sprites/laserbeam.spr"))
+	write_byte(0)	//starting frame
+	write_byte(10)	//frame rate in 0.1's
+	write_byte(life)	//life in 0.1's
+	write_byte(width)	//line width in 0.1's
+	write_byte(noise)	//noise amplitude in 0.01's
+	write_byte(r)	//r
+	write_byte(g)	//g
+	write_byte(b)	//b
+	write_byte(255)	//brightness
+	write_byte(0)	//scroll speed in 0.1's
+	message_end()
+}

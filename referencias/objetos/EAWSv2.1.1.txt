@@ -1,0 +1,305 @@
+#include <amxmodx>
+#include <hamsandwich>
+#include <fakemeta>
+
+#define SHIELD_SUPPORT
+//Shield can be disabled by changing code: //#define SHIELD_SUPPORT
+
+#define DEFAULT_MODE
+//This add the ability of the players to toggle if the plugin is active for them or not
+
+#if defined DEFAULT_MODE
+    #include <amxconst>
+    #include <nvault>
+
+    new const CHAT_TAG[] = "^4[ARM SKIN]^1" //Tag chat when toggle the weapon skinn view
+    new const PRUNE_DAYS = 30 //After how many days the inactive entries will be deleted
+    new const bool:DEFAULT_VALUE = true //Default value for players that never toggled model changer. True means that players skin will be changed by default until they disable it
+#endif
+
+//Linux diff
+const XO_WEAPON = 4
+
+// CBasePlayerItem
+const m_pPlayer = 41 // CBasePlayer *
+
+native cs_set_viewmodel_body(iPlayer, iValue);    //This will set v_ .mdl body (PlayerIndex, Bodygroup number)
+
+enum _:BodyID
+{
+    Arctic,
+    Gign,
+    GSG9,
+    Guerilla,
+    Leet,
+    SAS,
+    Terror,
+    Urban,
+    VIP,
+    Militia,
+    Spetsnaz
+}
+
+new const g_szModelName[BodyID][] =
+{
+    "arctic",
+    "gign",
+    "gsg9",
+    "guerilla",
+    "leet",
+    "sas",
+    "terror",
+    "urban",
+    "vip",
+    "militia",
+    "spetsnaz"
+}
+
+new const g_szUserInfoModel[] = "model"
+new const g_szWeaponNameMp5Navy[] = "weapon_mp5navy"
+new const g_szNewWeaponDirectoryMp5Navy[] = "models/extended/v_mp5.mdl"
+
+new const g_szWeaponNamePrefix[] = "weapon_"
+new const g_szNewWeaponDirectory[] = "models/extended/v_"
+new const g_szModelNameExtension[] = ".mdl"
+
+new Trie:g_tModels
+
+#if defined DEFAULT_MODE
+    new const g_szVaultName[] = "extended_arm_weapon_skin"
+    new g_iVault
+    new bool:g_bActive[MAX_PLAYERS+1]
+    new g_szAuthID[MAX_PLAYERS+1][MAX_AUTHID_LENGTH]
+#endif
+
+//Weapon ents
+new g_szWeaponNames[][] = {"weapon_knife", "weapon_glock18", "weapon_ak47", "weapon_aug", "weapon_awp", "weapon_c4", "weapon_deagle", "weapon_elite", "weapon_famas", 
+    "weapon_fiveseven", "weapon_flashbang", "weapon_g3sg1", "weapon_galil", "weapon_hegrenade", "weapon_m3", "weapon_xm1014", "weapon_m4a1", "weapon_m249", "weapon_mac10", 
+    "weapon_mp5navy", "weapon_p90", "weapon_p228", "weapon_scout", "weapon_sg550", "weapon_sg552", "weapon_smokegrenade", "weapon_tmp", "weapon_ump45", "weapon_usp" }
+
+//Old models to unprecache
+#if !defined DEFAULT_MODE
+new g_szOldModels[][] = {"models/v_knife.mdl", "models/v_glock18.mdl", "models/v_ak47.mdl", "models/v_aug.mdl", "models/v_awp.mdl", "models/v_c4.mdl" , "models/v_deagle.mdl", 
+    "models/v_elite.mdl", "models/v_famas.mdl", "models/v_fiveseven.mdl", "models/v_flashbang.mdl", "models/v_g3sg1.mdl", "models/v_galil.mdl", "models/v_hegrenade.mdl", 
+    "models/v_m3.mdl", "models/v_xm1014.mdl", "models/v_m4a1.mdl", "models/v_m249.mdl", "models/v_mac10.mdl", "models/v_mp5.mdl", "models/v_p90.mdl", "models/v_p228.mdl", 
+    "models/v_scout.mdl", "models/v_sg550.mdl", "models/v_sg552.mdl", "models/v_smokegrenade.mdl", "models/v_tmp.mdl", "models/v_ump45.mdl", "models/v_usp.mdl" }
+#endif 
+
+//New models to precache
+new g_szNewModels[][] = {"models/extended/v_knife.mdl", "models/extended/v_glock18.mdl", "models/extended/v_ak47.mdl", "models/extended/v_aug.mdl", "models/extended/v_awp.mdl", 
+    "models/extended/v_c4.mdl" , "models/extended/v_deagle.mdl", "models/extended/v_elite.mdl", "models/extended/v_famas.mdl", "models/extended/v_fiveseven.mdl", 
+    "models/extended/v_flashbang.mdl", "models/extended/v_g3sg1.mdl", "models/extended/v_galil.mdl", "models/extended/v_hegrenade.mdl", "models/extended/v_m3.mdl", 
+    "models/extended/v_xm1014.mdl", "models/extended/v_m4a1.mdl", "models/extended/v_m249.mdl", "models/extended/v_mac10.mdl", "models/extended/v_mp5.mdl", "models/extended/v_p90.mdl", 
+    "models/extended/v_p228.mdl", "models/extended/v_scout.mdl", "models/extended/v_sg550.mdl", "models/extended/v_sg552.mdl", "models/extended/v_smokegrenade.mdl", "models/extended/v_tmp.mdl", 
+    "models/extended/v_ump45.mdl", "models/extended/v_usp.mdl"}
+
+#if defined SHIELD_SUPPORT
+// Old shield models to unprecache:
+new g_szOldShieldModels[][] = {"models/shield/v_shield_usp.mdl", "models/shield/v_shield_fiveseven.mdl", "models/shield/v_shield_deagle.mdl",
+    "models/shield/v_shield_p228.mdl", "models/shield/v_shield_knife.mdl", "models/shield/v_shield_glock18.mdl",
+    "models/shield/v_shield_flashbang.mdl", "models/shield/v_shield_hegrenade.mdl", "models/shield/v_shield_smokegrenade.mdl"}
+
+//New shield models to precache
+new g_szNewShieldModels[][] = {"models/extended/v_shield_knife.mdl", "models/extended/v_shield_glock18.mdl", "models/extended/v_shield_deagle.mdl",
+    "models/extended/v_shield_fiveseven.mdl", "models/extended/v_shield_flashbang.mdl", "models/extended/v_shield_hegrenade.mdl",
+    "models/extended/v_shield_p228.mdl", "models/extended/v_shield_smokegrenade.mdl", "models/extended/v_shield_usp.mdl"}
+    
+new const g_szNewWeaponDirectoryShield[] = "models/extended/v_shield_"
+#endif
+
+new bool:IsUserAdmin[MAX_PLAYERS+1], g_pcvAdminFlag, g_pcvAdminSkin, g_pcvDefaultSkin
+
+public plugin_init()
+{
+    register_plugin("Extended Arm Weapon Skin", "2.1.1", "KayDee, lexzor, 1xAero")
+    
+    g_pcvAdminFlag = register_cvar("eaws_admin_flag", "")
+    g_pcvAdminSkin = register_cvar("eaws_admin_skin", "8")
+    g_pcvDefaultSkin = register_cvar("eaws_default_skin", "3")
+    
+    for(new i; i < sizeof g_szWeaponNames; i++)
+    {
+        RegisterHam(Ham_Item_Deploy, g_szWeaponNames[i], "ItemDeployPost", 1)
+    }
+
+    g_tModels = TrieCreate()
+    
+    for(new i = 0; i < BodyID; i++)
+    {
+        TrieSetCell(g_tModels, g_szModelName[i], i)
+    }
+
+    #if defined DEFAULT_MODE
+    if((g_iVault = nvault_open(g_szVaultName)) == INVALID_HANDLE)
+    {
+        set_fail_state("Vault file ^"%s^" coudln't be opened!", g_szVaultName)
+    }
+
+    nvault_prune(g_iVault, 0, get_systime() - (PRUNE_DAYS * 86400))
+
+    register_clcmd("say /armskin", "toggleCmd")
+    register_clcmd("say_team /armskin", "toggleCmd")
+    register_clcmd("amx_armskin", "toggleCmd")
+    #endif
+}
+
+#if defined DEFAULT_MODE
+public plugin_end()
+{
+    nvault_close(g_iVault)
+}
+
+public toggleCmd(id)
+{
+    g_bActive[id] = !g_bActive[id]
+
+    client_print_color(id, print_team_default, "%s You^4 %s^1 arm skin!", CHAT_TAG, g_bActive[id] ? "enabled" : "disabled")
+
+    nvault_set(g_iVault, g_szAuthID[id], fmt("%i", g_bActive[id] ? "1" : "0"))
+}
+#endif
+
+public plugin_precache()
+{
+    register_forward(FM_PrecacheModel, "Forward_PrecacheModel", 0)    //Unprecache old viewmodels
+
+    for(new i; i < sizeof g_szNewModels; i++)
+    {
+        precache_model(g_szNewModels[i])    //Precache now new viewmodels
+    }
+
+    #if defined SHIELD_SUPPORT
+    for(new i; i < sizeof g_szNewShieldModels; i++)
+    {
+        precache_model(g_szNewShieldModels[i])    //Precache now new shield viewmodels
+    }
+    #endif
+}
+
+public Forward_PrecacheModel(const szModel[])
+{
+    #if !defined DEFAULT_MODE
+    for(new i; i < sizeof g_szOldModels; i++) 
+    { 
+        if(equal(szModel, g_szOldModels[i]))  
+        {  
+            forward_return(FMV_CELL, 0)
+            return FMRES_SUPERCEDE
+        }  
+    }
+    #endif 
+
+    #if defined SHIELD_SUPPORT
+    for(new i; i < sizeof g_szOldShieldModels; i++) 
+    { 
+        if(equal(szModel, g_szOldShieldModels[i]))  
+        {
+            forward_return(FMV_CELL, 0)
+            return FMRES_SUPERCEDE
+        }  
+    }
+    #endif
+    return FMRES_IGNORED
+}
+
+public client_authorized(id)
+{
+    static szAdminFlags[16]
+    if(get_user_flags(id) & get_pcvar_string(g_pcvAdminFlag, szAdminFlags, charsmax(szAdminFlags)))
+        IsUserAdmin[id] = true
+    else
+        IsUserAdmin[id] = false
+
+    #if defined DEFAULT_MODE
+    static szData[8], iTs
+    get_user_authid(id, g_szAuthID[id], charsmax(g_szAuthID[]))
+
+    if(nvault_lookup(g_iVault, g_szAuthID[id], szData, charsmax(szData), iTs))
+    {
+        g_bActive[id] = bool:str_to_num(szData)
+    }
+    else
+    {
+        g_bActive[id] = DEFAULT_VALUE
+    }
+    #endif
+}  
+
+public ItemDeployPost(iWeapon)
+{    
+    static id
+    id = get_pdata_cbase(iWeapon, m_pPlayer, XO_WEAPON)
+
+    if(!is_user_alive(id))
+    {
+        return HAM_IGNORED
+    }
+
+    #if defined DEFAULT_MODE
+    if(!g_bActive[id])
+    {
+        return HAM_IGNORED
+    }
+    #endif
+
+    static szModelInfo[9]
+    get_user_info(id, g_szUserInfoModel, szModelInfo, charsmax(szModelInfo))
+   
+    new iNum;
+    // Admin Model
+    if(IsUserAdmin[id])
+    {
+        cs_set_viewmodel_body(id, get_pcvar_num(g_pcvAdminSkin))
+    }
+    // Real Model
+    else if(TrieGetCell(g_tModels, szModelInfo, iNum))
+    {
+        cs_set_viewmodel_body(id, iNum)
+    }
+    // Custom Model
+    else
+    {
+        cs_set_viewmodel_body(id, get_pcvar_num(g_pcvDefaultSkin))
+    }
+
+    set_task(0.1, "SetSkin", id) //this task is needed
+
+    return HAM_IGNORED
+}
+
+#if defined SHIELD_SUPPORT
+const m_bOwnsShield = 2043
+new const ShieldPossible = (1 << CSW_HEGRENADE) | (1 << CSW_SMOKEGRENADE) | (1 << CSW_FLASHBANG) | (1 << CSW_KNIFE) |(1 << CSW_USP) | (1 << CSW_P228) | (1 << CSW_GLOCK18) | (1 << CSW_FIVESEVEN) | (1 << CSW_DEAGLE)
+#endif
+
+public SetSkin(id)
+{
+    if(!is_user_alive(id))
+        return
+    
+    new iWeapon = get_user_weapon(id)
+        
+    if(!iWeapon)
+        return
+        
+    static szWeapon[64]
+    get_weaponname(iWeapon, szWeapon, charsmax(szWeapon))
+    
+    if(equal(szWeapon, g_szWeaponNameMp5Navy))
+    {
+        replace(szWeapon, charsmax(szWeapon), szWeapon, g_szNewWeaponDirectoryMp5Navy)
+    }
+    #if defined SHIELD_SUPPORT
+    else if(ShieldPossible & (1 << iWeapon) && get_pdata_bool(id, m_bOwnsShield))
+    {
+        replace(szWeapon, charsmax(szWeapon), g_szWeaponNamePrefix, g_szNewWeaponDirectoryShield)
+        formatex(szWeapon, charsmax(szWeapon), "%s%s", szWeapon, g_szModelNameExtension)
+    }
+    #endif
+    else
+    {
+        replace(szWeapon, charsmax(szWeapon), g_szWeaponNamePrefix, g_szNewWeaponDirectory)
+        formatex(szWeapon, charsmax(szWeapon), "%s%s", szWeapon, g_szModelNameExtension)
+    }    
+    set_pev(id, pev_viewmodel2, szWeapon)
+} 

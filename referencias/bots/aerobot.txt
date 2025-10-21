@@ -1,0 +1,566 @@
+/*==========================================================================
+
+----------------------
+--- Licensing Info ---
+----------------------
+
+Copyright (C) 2023 by 1xAero
+
+This program is free software: you can redistribute it and/or modify
+it, share, upload wherever you want without author's permission.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+-------------------
+--- Description ---
+-------------------
+
+AEROBOT.XYZ is an Artificial Intelligence or just a simply computer 
+controlled player directly written as an AMX Mod X plugin. Does not requires 
+making waypoints. Supports GoldSource based game. Currently supported mods:
+
+   - Half-Life
+   - Deathmatch Classic
+   - Adrenaline Gamer - FFA and FFAX mode
+   - CSDM FFA Deathmatch  
+   - CSDM Team Deathmatch - fy_ and aim_ maps
+   - Counter-Strike fy_ and aim_ maps
+   - partially default Counter-Strike maps - scenario scripts not implemented
+   - partially default Counter-Strike: Condition Zero maps - scenario scripts not implemented
+   
+Feel free to edit, continue work and improve.
+
+* !! BOTS-UNITED FOREVER !!
+		
+--------------------
+--- Requirements ---
+--------------------
+
+* Mods: GoldSource
+* Metamod 1.21p38: 
+  - https://metamod-p.sourceforge.net/
+* AMXX Version 1.10: 
+  - https://www.amxmodx.org/downloads-new.php?branch=master
+
+-----------------
+--- Changelog ---
+-----------------
+	
+* template: (June 12 2023)
+  - public release.
+  
+* template update: (June 13 2023)
+  - removed unneeded checks from code. 
+  - fixed bug with error on bot connection
+
+* template update: (June 14 2023)
+  - max spawns limited to 32 for custom maps.
+
+* template update: (June 28 2023)
+  - code cleanup. 
+
+* template update: (July 18 2023)
+  - Half-Life/Adrenaline Gamer:
+    NOTE: Engine bug? Reaching over max map spawn points causes client kick without entity limits.
+    Fixed Adrenaline Gamer chat (hud space allocation and correсt console text line transfer).
+    Improved bot movement and reaction with RPG, added random AR Grenade usage for bot.
+    Added delay to draw Weaponlist and item info properly at human spawn.
+    Added 9mmAR with Grenades to human at spawn.
+	
+* template update: (July 19 2023)
+  - Half-Life/Adrenaline Gamer:
+    Added handgrenades, snarks, hornet and gluon gun for bots.
+    Fixed bot trying to attack spectator or dead body: Adrenaline Gamer and other.
+    Fixed bot is not attacking and not switching to his primary weapon.
+	
+* template update: (July 20 2023)
+  - Half-Life/Adrenaline Gamer:
+    Fixed bot spawning without weapon in Adrenaline Gamer FFAX mode: hornetgun replaced with weapon_9mmAR.
+    Removed weapons from bots: weapon_egon, weapon_handgrenade, weapon_rpg, rifle grenades. 
+    Reason: bunch of bots or players with it causing huge lags on clientside (lots of TE_ effects flooding on netchan).
+    Maxbots amount now equal to server maxplayers cvar - 1.
+    Applied bottomcolor for bot skin.
+
+* template update: (July 23 2023)
+  - Deathmatch Classic:
+    Added Rocketlauncher to bots. Bots can wear now most powerful weapon.  
+
+* template update: (Nov 18 2023)
+  - Added delay to bot chat. Fixed Host_Error: PF_MessageEnd_I.
+    Added support for Half-Life 25th Anniversary Update.
+	
+* template update: (Nov 18 2023)
+  - Half-Life:
+    Added support for Half-Life Team Deathmatch.
+
+* template update: (Nov 20 2023)
+  - Half-Life:
+    RPG Rocket mode is back. Use apb_hl_rocket 1 console command to enable only weapon_rpg mode.
+
+* beta build: 0.1B (Nov 30 2023)
+  - Half-Life:
+    Added spawn protection and player spawn from telefrag kill. Fixed client crash on death.
+    Fixed client crashes with large amount of bots. Max amounts of gibs to draw at once is limited to 30.
+    New weapons added: tripmine, satchel, handgrenades, crossbow, shotgun, gluon gun, ar grenades, all weapon with alternate fire.   
+  - Engine bugfix ED_Alloc: no free edicts. By default, after a players death, a weaponbox appears and exists for 2 minutes, with large 
+    amount of players the entity limit easily goes above 2k in a short time. By removing it from the game, we are 
+    saving entity limits/server from crash. Added bot autofill option.
+    New items, available to player: randomly choosen gluon gun/gauss, ar grenades.
+
+ * beta build: 0.2C (Nov 30 2023)
+  - Half-Life:
+    Fully ported to new Half-Life build. Incompatible Ham forwards changed to Fakemeta forwards.
+
+  * beta build: 0.2A (Nov 30 2023)
+  - Half-Life:
+    Randomized satchels usage. Bots can throw randomly multiple packs now.
+
+  * beta build: 0.3C (Dec 1 2023)
+  - Task data moved to task manager. Fixed first connected player announcement.
+    AIO release now does not changes/replaces client files.
+
+  * beta build: 0.3B (Dec 2 2023)
+  - Added pBot difficulty/reaction timer cvar. Fixed bug with firstpawn, no more
+    second crowbar appears. Added bot amount setting. Added configuration file.
+    For more open aerobot.cfg 
+
+  * beta build: 0.4C/0.4B (Dec 12 2023)
+  - Instead of giving armor banks, player receives armor with armorvalue at spawn.
+
+  * beta build: 0.4A/0.5C (Dec 14 2023)
+  - Fixed health/armor value at spawn.
+
+  * beta build: 0.7A (Dec 21 2023)
+  - Bot movement for Half-Life: combat jumptricks and faster movement.
+    Added optional thirdperson camera script, print /cam in chat to toggle, again to turn it off.
+    Balanced bot difficulty/reaction time. By default the bot difficulty changed to 3 for trick movement.
+    Added automated monster spawn, after player death houndeye or hgrunt will appear on dead player origin.
+    Monster apache will spawn on some maps.
+
+  * beta build: 0.8C (Dec 24 2023)
+  - Fixed crash on monsters death/spawn. 
+
+  * beta build: 0.8B (Dec 27 2023)
+  - Quality of Life for monster spawner script. 
+    Fixed 3rd person camera crash on death/respawn.  
+
+  * beta build: 0.8A (Dec 27 2023)
+  - Quality of Life for monster spawner script: removed weird task for gargantua.
+    Fixed pev_flags -> pev_spawnflags for SF_MONSTER_FALL_TO_GROUND.
+
+  * beta build: 0.9C (Dec 27 2023)
+  - Quality of Life for monster spawner script: fixed crashes on maps, 
+    where weapon_9mmAR is spawning by default (like crossfire).
+	
+===========================================================================*/
+
+#include <amxmodx>
+#include <fakemeta>
+#include <hamsandwich>
+
+#define PLUGIN "AEROBOT.XYZ"
+#define VERSION "beta"
+#define AUTHOR "1xAero"
+
+#include "aerobot/0x0001_settings.sma"
+#include "aerobot/0x0002_touch.sma"
+#include "aerobot/0x0003_ragebot.sma"
+#include "aerobot/0x0004_movement.sma"
+#include "aerobot/0x0005_functions.sma"
+#include "aerobot/0x0006_equipment.sma"
+
+public plugin_init()
+{
+	register_plugin(PLUGIN, VERSION, AUTHOR);
+
+	//Remove gives weapon entities manually.
+	if(RUN_APB_GAME_AGHL())
+		register_forward(FM_SetModel, "Forward_OnSetModel_Post", TRUE);
+	
+	/*This function gets called each Frame and is the core of
+	all Bot AI. From here all other Subroutines are called*/
+	register_forward(FM_StartFrame, "Forward_StartFrame", FALSE);
+
+	//pBot Ragebot registration.
+	register_forward(FM_PlayerPostThink, "Forward_PlayerPostThink", FALSE);	
+	
+	/*Because we are lazy to make waypoint system, let's check only wall touch
+	and make them run around everywhere.*/
+	register_forward(FM_Touch, "Forward_PlayerTouch", FALSE);
+	
+	//Showcase functions.
+	RegisterHam(Ham_Spawn, "player", "HamF_PlayerSpawn_Post", TRUE);
+		
+	//pBots trashtalk on kill or death.
+	RegisterHam(Ham_Killed, "player", "HamF_Killed_Post", TRUE);
+
+	//Draw info.
+	console_print(NULL, "MaxClients available: %d", MaxClients);
+	
+	//Only for Counter-Strike.
+	if(RUN_APB_GAME_COUNTERSTRIKE())
+	{
+	
+		#if defined PB_WEAPON_SPREAD
+		
+			//pBot accuracy force. Test weapons.
+			RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_ak47", "HamF_Weapon_PrimaryAttack", TRUE);
+			RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_m4a1", "HamF_Weapon_PrimaryAttack", TRUE);
+			
+		#endif
+		
+		//Get maximum map spawns for Counter-Strike.
+		Function_RetrieveMapInfo("info_player_start");
+		Function_RetrieveMapInfo("info_player_deathmatch");
+
+		//Some custom maps may have over 32 spawns.
+		if(c_info_player > MaxClients)
+			c_info_player = MaxClients;
+
+		//Initiate before player connection.
+		c_maxfakeclient = c_info_player - 1;		
+	}
+
+	/*By default Half-Life and Deathmatch Classic are
+	not limited from spawn, so just let's force server maxplayers.
+	But cleanly the start point is only info_player_deathmatch*/
+	else	
+		c_maxfakeclient = MaxClients - 1; //Bug 25th Anniversary?
+
+	//Get Deathmatch mode for other mods.
+	Function_PBTeamGame();
+	
+	//Check Half-Life DM/TDM automatically.
+	if(c_fakeplayer_game_mod == PB_GAME_MOD_HL)
+	{
+		new game_var;
+		game_var = get_cvar_num("mp_teamplay");
+		
+		switch(game_var)
+		{
+			case 0: c_fakeplayer_teammate = false;
+			case 1: c_fakeplayer_teammate = true;
+		}
+	}	
+
+	//Setup frametime.
+	c_fake_player_frametime = get_gametime();				
+	
+	//Add bot.
+	register_srvcmd("apb_add", "Function_CreateBotEdict");
+	
+	//Fill server.
+	register_srvcmd("apb_fill", "Function_AddMaxBotEdict");
+	
+	//Kick all bots.
+	register_srvcmd("apb_kickall", "Function_KickBotEdict");
+	
+	//Kill all bots.
+	register_srvcmd("apb_kill", "Function_KillBotEdict");
+
+	//Bot quota. Requires server to restart.
+	register_cvar("apb_bot_amount", "31", FCVAR_PROTECTED);	
+
+	//Kaboom mode.
+	register_cvar("apb_hl_rocket", "0", FCVAR_PROTECTED);
+
+	//pBot reaction time to player. Max difficulty is 4 and min is 1.
+	register_cvar("apb_difficulty", "1", FCVAR_PROTECTED);			
+}
+
+//Create Bot.
+public Function_CreateBotEdict(iPlayer)
+{
+	//Don't allow creating Bots when max_bots or max info_player spawn is reached.
+	if(c_player_count > Function_ReturnTotalPlayers())
+	{
+		//Draw info.	
+		client_print(iPlayer, print_center, "Max Bots reached, can't create Bot !");
+		return PLUGIN_HANDLED;
+	}	
+
+	//Uses prefix or not?
+	new pBotNames[64];
+	
+	#if defined PB_PREFIX
+
+		new pBotChar[64];
+		new iRandomPrefix;
+		
+		iRandomPrefix = random_num(1, 8);
+		
+		switch(iRandomPrefix)
+		{
+			case 1: pBotChar = "APB | %s"
+			case 2: pBotChar = "[AeroBot] %s"
+			case 3: pBotChar = "gamesense %s"
+			case 4: pBotChar = "AeroBot %s"
+			case 5: pBotChar = "aerobot.cc - %s"
+			case 6: pBotChar = "AEROBOT.XYZ | %s"
+			case 7: pBotChar = "VALVe %s"
+			case 8: pBotChar = "Uncle Gabe. %s"
+		}
+
+		formatex(pBotNames, charsmax(pBotNames), pBotChar, c_name[(sizeof c_name - c_player_count) - 1]);
+		
+	#else
+
+		formatex(pBotNames, charsmax(pBotNames), c_name[(sizeof c_name - c_player_count) - 1]);
+		
+	#endif	
+
+	//This call creates the Fakeclient
+	new pBot = engfunc(EngFunc_CreateFakeClient, pBotNames);
+
+	//Failed?
+	if(!pBot)
+		return PLUGIN_HANDLED;
+		
+	engfunc(EngFunc_FreeEntPrivateData, pBot);
+	
+	//Create the player entity by calling MOD's player function
+	dllfunc(MetaFunc_CallGameEntity, "player", pBot);
+	
+	//Set all Infobuffer Keys for this Bot
+	new infokeybuffer = engfunc(EngFunc_GetInfoKeyBuffer, pBot);
+	
+	//Apply random model for Half-Life/Deathmatch Classic.
+	if(RUN_APB_GAME_DEATHMATCH())
+		Function_SelectPlayerModel(pBot, infokeybuffer);	
+	else		
+		engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "model", "gordon");
+		
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "rate", "3500.000000");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "cl_updaterate", "20");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "cl_lw", "1");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "cl_lc", "1");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "tracker", "0");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "cl_dlmax", "128");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "lefthand", "1");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "friends", "0");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "dm", "0");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "_ah", "0");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "_vgui_menus", "0");
+	engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "*bot", "1");
+
+	//Let them switch while playing DMC.
+	if(c_fakeplayer_game_mod != PB_GAME_MOD_DMC)
+		engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "cl_autowepswitch", "0");
+	else
+		engfunc(EngFunc_SetClientKeyValue, pBot, infokeybuffer, "cl_autowepswitch", "1");
+	//- End Infobuffer -
+
+	//Buttons and action.
+	Function_FakePlayerCondition(pBot);	
+	
+	//Allocate space for message from ClientConnect
+	new ptr[128];
+	
+	//Connect this client with the local loopback
+	dllfunc(DLLFunc_ClientConnect, pBot, pBotNames, "127.0.0.1", ptr);
+	
+	//Set the third party bot flag
+	set_pev(pBot, pev_flags, pev(pBot, pev_flags) | FL_FAKECLIENT);
+	
+	//Pieter van Dijk - use instead of DispatchSpawn() - Hip Hip Hurray!
+	dllfunc(DLLFunc_ClientPutInServer, pBot);
+	
+	//Prepare pBot RunMove.
+	Function_ResetPlayerMove(pBot);
+
+	//Start playing.
+	Function_ClientSelectRole(pBot);
+	
+	return PLUGIN_HANDLED;
+}
+
+//We can control via set model amount of entities, to avoid ED_Alloc: no free edict
+public Forward_OnSetModel_Post(iEntity, const iModel[])
+{
+	if(!pev_valid(iEntity))
+		return;
+		
+	new iClassname[32];
+	pev(iEntity, pev_classname, iClassname, charsmax(iClassname));
+	
+	//console_print(NULL, "Entities: %s", iClassname);
+
+	Function_SetupRemovables(iClassname);
+}	
+
+/*Computer controlled player Routine: Movement, Action.
+NOTE: KWo's method does not skip rare frames*/
+public Forward_StartFrame()
+{
+	static Float: i_msecval;
+	
+	//This is PMB method of computing msec value
+	//global_get(glb_frametime, i_msecval); //KWo
+	
+	//This is Leon Hartwig's method for computing the msec value.
+	i_msecval = (get_gametime() - c_fake_player_frametime);
+	c_fake_player_frametime = get_gametime();
+	
+	//Set msec value.
+	Function_StartCompute(i_msecval);	
+
+	//For each bot registering it's own think.
+	for(new pBot = 1; pBot < MaxClients + 1; pBot ++)
+	{
+		//This is pBot index. This is called all the time.	
+		if(c_fakeplayer_edict[pBot] && is_user_connected(pBot))	
+			Function_FakePlayerThink(pBot, f_msecval);			
+	}
+	
+	return FMRES_IGNORED;
+}
+
+//Simple Ragebot logic with delay. No hitscan is required.
+public Forward_PlayerPostThink(pBot)
+{
+	//Not a pBot index. Skip.
+	if(!c_fakeplayer_edict[pBot])
+		return FMRES_IGNORED;
+		
+	//pBot is dead stop.
+	if(!is_user_alive(pBot))
+		return FMRES_IGNORED;
+				
+	//Apply delay and check if this pBot is already holding IN_ATTACK. Check difficulty.
+	if(c_fakeplayer_attack_time[pBot] < get_gametime() && !c_fakeplayer_attacking[pBot] && c_fakeplayer_reaction_time[pBot] < get_gametime())
+		Function_Ragebot(pBot);	
+
+	return FMRES_IGNORED;
+}
+
+//Is this is trying to tank wall?
+public Forward_PlayerTouch(pBot, iEntity)
+{
+	if(!pev_valid(pBot))
+		return FMRES_IGNORED;
+
+	new iPlayerClassname[32];
+	pev(pBot, pev_classname, iPlayerClassname, charsmax(iPlayerClassname));
+    
+	//Not a player entity.
+	if(!equal(iPlayerClassname, "player"))
+		return FMRES_IGNORED;
+
+	//Pass for Bot edict.
+	if(!c_fakeplayer_edict[pBot])
+		return FMRES_IGNORED;
+	
+	//Dead.
+	if(!is_user_alive(pBot))
+		return FMRES_IGNORED;
+		
+	//Not too often.	
+	if(c_fakeplayer_walltouch_time[pBot] > get_gametime())
+		return FMRES_IGNORED;
+		
+	//Calculate objects on movement direction.	
+	Function_FakePlayerTouch(pBot);
+	
+	return FMRES_IGNORED;
+}
+
+//Fill server with pBots.
+public Function_AddMaxBotEdict(iPlayer)
+{
+	#define PB_DEFAULTTIMER 0.0	
+	#define FILL_TIMER 0.5
+	new Float: c_fakeplayer_currenttime = PB_DEFAULTTIMER;
+
+	new iSender;
+	iSender = iPlayer - PB_FILLBOT;
+
+	//GM pushing button non stop? Remove all existing tasks.
+	for(new pBot = 1; pBot < MaxClients + 1; pBot ++)
+		remove_task(iSender + PB_FILLBOT);
+
+	//No free slot found.
+	if(c_player_count > Function_ReturnTotalPlayers())
+	{
+		client_print(iPlayer, print_center, "Server is full, can't create Bot !");	
+		return PLUGIN_HANDLED;
+	}	
+	
+	//Make delay between each connection.
+	if(c_player_count < Function_ReturnTotalPlayers())
+	{
+		for(new pBot = 1; pBot < Function_ReturnTotalPlayers() + 1; pBot ++)
+		{
+			set_task(FILL_TIMER + c_fakeplayer_currenttime, "Function_CreateBotEdict", iSender + PB_FILLBOT);
+			
+			//Increase each bot connection time.
+			c_fakeplayer_currenttime += FILL_TIMER;
+		}
+	}
+	
+	return PLUGIN_HANDLED;	
+}
+
+//Remove all Bots.
+public Function_KickBotEdict()
+{
+	//Loops through connected players.
+	for(new pBot = 1; pBot < MaxClients + 1; pBot ++)
+	{
+		if(c_fakeplayer_edict[pBot])
+		{
+			new pName[32];
+			pName = Function_GetPlayerName(pBot);
+			
+			/*fuckin Dick Kickem 8)
+			All deported back to the moon*/
+			server_cmd("kick ^"%s^"", pName);
+
+			client_print(NULL, print_chat, "%s have been kicked.", pName);
+		}	
+	}
+	
+	return PLUGIN_HANDLED;
+}
+
+//Kill all Bots.
+public Function_KillBotEdict()
+{
+	//Allow for Counter-Strike.
+	if(!RUN_APB_GAME_COUNTERSTRIKE())
+		return PLUGIN_HANDLED;
+
+	//Loops through connected players.
+	for(new pBot = 1; pBot < MaxClients + 1; pBot ++)
+	{
+		if(c_fakeplayer_edict[pBot] && is_user_alive(pBot))
+			dllfunc(DLLFunc_ClientKill, pBot);	
+	}
+	
+	return PLUGIN_HANDLED;
+}
+
+//Remove slot
+public client_disconnected(pBot)
+{
+	//Player or pBot left.
+	c_player_count -= 1;
+
+	//Increase maxbot amount.
+	c_maxfakeclient += 1;	
+
+	//pBot data.
+	if(c_fakeplayer_edict[pBot])		
+		c_fakeplayer_edict[pBot] = false;	
+}
+
+//Count here real players too.
+public client_putinserver(pBot)
+{
+	//Player or pBot entered.
+	c_player_count += 1;
+
+	//Decrease maxbot amount.
+	c_maxfakeclient -= 1;	
+}	

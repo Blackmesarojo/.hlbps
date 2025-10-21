@@ -1,0 +1,242 @@
+//#define TEST_3RD
+
+#include <amxmodx>
+#include <fakemeta>
+#include <hamsandwich>
+
+#if defined TEST_3RD
+#include <engine>
+#endif
+
+#pragma semicolon 1
+
+const MAX_MODEL_PATH_LENGTH = 64;
+
+const XO_CBASEPLAYERITEM = 4;
+const m_pPlayer = 41;
+const m_pNext = 42;
+const m_iId = 43;
+
+const XO_CBASEPLAYERWEAPON = 4;
+const m_fWeaponState = 74;
+
+const WEAPONSTATE_USP_SILENCED = 1<<0;
+
+enum {
+	NULL = 0,
+	PRIMARY,
+	SECONDARY,
+	KNIFE,
+	GRENADE,
+	C4,
+	MAX_WPNS
+};
+
+new const m_rgpPlayerItems_CBasePlayer[6] = {367, 368, ...};
+const m_pActiveItem = 373;
+
+enum {
+	// Nothing
+	Blank = 0,
+
+	// Pistols
+	Deagle = 2,
+	Elites = 4,
+	FiveSeveN = 6,
+	Glock18 = 8,
+	P228 = 10,
+	USP = 12,
+	USP_NoSil = 14,
+
+	// Knife
+	Knife = 1,
+
+	// Grenades
+	Flashbang = 16,
+	Flashbangs = 32,
+	HE = 48,
+	SGren = 96
+};
+
+new const g_iModelIndexLookupTable[CSW_LAST_WEAPON + 1] = {
+	0, // 
+	P228, // CSW_P228
+	0, // 
+	0, // CSW_SCOUT
+	HE, // CSW_HEGRENADE
+	0, // CSW_XM1014
+	0, // CSW_C4
+	0, // CSW_MAC10
+	0, // CSW_AUG
+	SGren, // CSW_SMOKEGRENADE
+	Elites, // CSW_ELITE
+	FiveSeveN, // CSW_FIVESEVEN
+	0, // CSW_UMP45
+	0, // CSW_SG550
+	0, // CSW_GALIL
+	0, // CSW_FAMAS
+	USP, // CSW_USP
+	Glock18, // CSW_GLOCK18
+	0, // CSW_AWP
+	0, // CSW_MP5NAVY
+	0, // CSW_M249
+	0, // CSW_M3
+	0, // CSW_M4A1
+	0, // CSW_TMP
+	0, // CSW_G3SG1
+	Flashbang, // CSW_FLASHBANG
+	Deagle, // CSW_DEAGLE
+	0, // CSW_SG552
+	0, // CSW_AK47
+	Knife, // CSW_KNIFE
+	0 // CSW_P90
+};
+
+new g_flash[] = {
+	NULL,
+	Flashbang,
+	Flashbangs
+};
+
+new g_szModel[MAX_MODEL_PATH_LENGTH] = "models/sideweapons0.2.mdl"; // ur model here
+
+new g_iMaxWpn[MAX_WPNS];
+
+new g_useless;
+
+public plugin_init()
+{
+	register_plugin("SideWeapon", "0.2", "kww");
+
+    // how much weapons u can have in 1 slot?
+	bind_pcvar_num(create_cvar("bw_maxpistols", "1", FCVAR_SERVER), g_iMaxWpn[SECONDARY]);
+	bind_pcvar_num(create_cvar("bw_maxknives", "1", FCVAR_SERVER), g_iMaxWpn[KNIFE]);
+	bind_pcvar_num(create_cvar("bw_maxgrenades", "4", FCVAR_SERVER), g_iMaxWpn[GRENADE]);
+	
+	new szWeaponName[32];
+	for(new wpn = CSW_P228; wpn <= CSW_P90; wpn++)
+	{
+		if(g_iModelIndexLookupTable[wpn] && get_weaponname(wpn, szWeaponName, charsmax(szWeaponName)))
+		{	
+			RegisterHam(Ham_Item_AttachToPlayer, szWeaponName, "Ham_Item_AttachToPlayer_Post", true);
+			RegisterHam(Ham_Item_Holster, szWeaponName, "Ham_Item_Holster_Post", true);
+			RegisterHam(Ham_Item_Deploy, szWeaponName, "Ham_Item_Deploy_Pre", false);
+		}
+	}
+
+	RegisterHam(Ham_RemovePlayerItem, "player", "Ham_RemovePlayerItem_Post", true);
+
+#if defined TEST_3RD
+	RegisterHam(Ham_Spawn, "player", "Ham_Spawn_Post", true);
+}
+
+public Ham_Spawn_Post(id)
+{
+	if(is_user_alive(id) && !is_user_bot(id))
+	{
+		set_view(id, CAMERA_3RDPERSON);
+	}
+#endif
+}
+
+public plugin_precache()
+{
+	if(!file_exists(g_szModel, true))
+	{
+		set_fail_state("Model file is not found");
+	}
+
+	precache_model(g_szModel);
+
+#if defined TEST_3RD
+	precache_model("models/rpgrocket.mdl");
+#endif
+}
+
+public Ham_Item_AttachToPlayer_Post(iEnt, id)
+{
+	if(!is_user_alive(id))
+	{
+		return;
+	}
+
+	engfunc(EngFunc_SetModel, iEnt, g_szModel);
+
+	set_pev(iEnt, pev_body, g_iModelIndexLookupTable[ get_pdata_int(iEnt, m_iId, XO_CBASEPLAYERITEM) ]);
+	
+	if(get_pdata_cbase(id, m_pActiveItem) != iEnt)
+	{
+		CheckWeapons(id);
+	}
+}
+
+public Ham_Item_Holster_Post(iEnt)
+{
+	new wpn_owner = get_pdata_cbase(iEnt, m_pPlayer, XO_CBASEPLAYERITEM);
+
+	if(is_user_alive(wpn_owner))
+	{
+		CheckWeapons(wpn_owner);
+	}
+}
+
+public Ham_RemovePlayerItem_Post(id, iEnt)
+{
+	if(PRIMARY < ExecuteHam(Ham_Item_ItemSlot, iEnt) < C4)
+	{
+		CheckWeapons(id, get_pdata_cbase(id, m_pActiveItem));
+	}
+}
+
+public Ham_Item_Deploy_Pre(iEnt)
+{
+	new wpn_owner = get_pdata_cbase(iEnt, m_pPlayer, XO_CBASEPLAYERITEM);
+
+	if(is_user_alive(wpn_owner))
+	{
+		CheckWeapons(wpn_owner, iEnt);
+	}
+}
+
+CheckWeapons(id, iSkipEnt = FM_NULLENT)
+{
+	static iMaxWeapons;
+	static iWeapon;
+	static iWpnId;
+
+	for(new slot = SECONDARY; slot < C4; slot++)
+	{
+		iWeapon = get_pdata_cbase(id, m_rgpPlayerItems_CBasePlayer[slot]);
+		iMaxWeapons = g_iMaxWpn[slot];
+
+		while(iWeapon > 0)
+		{
+			iWpnId = get_pdata_int(iWeapon, m_iId, XO_CBASEPLAYERITEM);
+
+			if(iWeapon == iSkipEnt || iMaxWeapons <= 0)
+			{
+				set_pev(iWeapon, pev_effects, EF_NODRAW);
+			}
+			else
+			{
+				if(iWpnId == CSW_USP)
+				{
+					if(get_pdata_int(iWeapon, m_fWeaponState, XO_CBASEPLAYERWEAPON) & WEAPONSTATE_USP_SILENCED)
+					{
+						set_pev(iWeapon, pev_body, USP);
+					}
+					else
+					{
+						set_pev(iWeapon, pev_body, USP_NoSil);
+					}
+				}
+
+				set_pev(iWeapon, pev_effects, 0);
+				
+				--iMaxWeapons;
+			}
+
+			iWeapon = get_pdata_cbase(iWeapon, m_pNext, XO_CBASEPLAYERITEM);
+		}
+	}
+}

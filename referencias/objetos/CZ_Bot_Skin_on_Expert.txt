@@ -1,0 +1,90 @@
+#include amxmodx
+#include cstrike
+#include hamsandwich
+#include engine
+ 
+new const szRandomSkinT[5][] = 
+{
+    "arctic",
+    "guerilla",
+    "leet",
+    "militia",
+    "terror"
+}
+ 
+new const szRandomSkinCT[5][] = 
+{
+    "gign",
+    "gsg9",
+    "sas",
+    "urban",
+    "spetsnaz"
+}
+
+new bool:g_bRegisterBots = true
+new bool:bWasVIP[MAX_PLAYERS+1]
+new const g_szVIPModelName[] = "vip"
+ 
+public plugin_init()
+{
+	register_plugin("CZ Bot Skin", "1.1", "KayDee")
+	register_logevent("LogEvent_JoinTeam", 3, "1=joined team")
+	
+	if(find_ent_by_class(-1, "func_vip_safetyzone") != 0)
+		g_bRegisterBots = false
+}
+
+public client_putinserver(id) bWasVIP[id] = false
+ 
+public LogEvent_JoinTeam()
+{
+    new id = GetLogUserIndex()
+ 
+    if(!is_user_connected(id) || !is_user_bot(id)) return PLUGIN_CONTINUE
+    
+    if(!g_bRegisterBots)
+    {
+	g_bRegisterBots = true
+	RegisterHamFromEntity(Ham_Spawn, id, "Ham_Spawn_player_Post", 1)
+	Ham_Spawn_player_Post(id)
+    }
+ 
+    static szTeam[2]
+    read_logargv(2, szTeam, 1)
+    switch(szTeam[0])
+    {
+        case 'T': cs_set_user_model(id, szRandomSkinT[random_num(0, 5)])
+        case 'C': cs_set_user_model(id, szRandomSkinCT[random_num(0, 5)])
+    }
+    return PLUGIN_CONTINUE
+}
+
+public Ham_Spawn_player_Post(id)
+{
+	if(!is_user_alive(id)) return HAM_IGNORED
+	
+	if(!cs_get_user_vip(id) && bWasVIP[id])
+	{
+		bWasVIP[id] = false
+		new CsTeams:Team = cs_get_user_team(id)
+		switch(Team)
+		{
+			case CS_TEAM_T: cs_set_user_model(id, szRandomSkinT[random_num(0, 5)])
+			case CS_TEAM_CT: cs_set_user_model(id, szRandomSkinCT[random_num(0, 5)])
+		}
+	}
+	else if(cs_get_user_vip(id))
+	{
+		bWasVIP[id] = true
+		cs_set_user_model(id, g_szVIPModelName)
+	}
+	return HAM_IGNORED
+}
+
+GetLogUserIndex()
+{
+    static szLogUser[80], szName[32]
+    read_logargv( 0, szLogUser, charsmax( szLogUser ) )
+    parse_loguser( szLogUser, szName, charsmax( szName ) )
+    return get_user_index( szName )
+}

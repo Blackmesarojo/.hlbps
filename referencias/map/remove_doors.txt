@@ -1,0 +1,40 @@
+#include <amxmodx>
+#include <fakemeta>
+
+new cvar_remove_doors
+
+public plugin_init()
+{
+	register_plugin("remove_doors", "1.0", "not_a_door")
+	
+	cvar_remove_doors = register_cvar("amx_remove_doors", "2") // Remove doors from maps [0-none // 1-rotating only // 2-all doors]
+	
+	register_event("HLTV", "event_round_start", "a", "1=0", "2=0")
+}
+
+// Event Round Start
+public event_round_start()
+{
+	// Remove doors?
+	if (get_pcvar_num(cvar_remove_doors) > 0)
+		set_task(0.1, "remove_doors")
+}
+
+// Remove Doors Task
+public remove_doors()
+{
+	new ent
+	
+	// Remove rotating doors
+	ent = -1;
+	while ((ent = engfunc(EngFunc_FindEntityByString, ent, "classname", "func_door_rotating")) != 0)
+		engfunc(EngFunc_SetOrigin, ent, Float:{8192.0 ,8192.0 ,8192.0})
+	
+	// Remove all doors?
+	if (get_pcvar_num(cvar_remove_doors) > 1)
+	{
+		ent = -1;
+		while ((ent = engfunc(EngFunc_FindEntityByString, ent, "classname", "func_door")) != 0)
+			engfunc(EngFunc_SetOrigin, ent, Float:{8192.0 ,8192.0 ,8192.0})
+	}
+}

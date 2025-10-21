@@ -1,0 +1,265 @@
+#include <fakemeta>
+#include <engine>
+
+// --- Variables Globales para la IA ---
+new Float:g_bot_angles[33][3];
+new bool:g_bot_has_target[33];
+new bool:g_bot_is_attacking[33];
+new Float:g_bot_attack_time[33];
+new g_bot_target_id[33];
+
+// --- CEREBRO 1: MOVIMIENTO Y DECISIÓN DE DISPARO ---
+public bot_movement_think() {
+    for (new bot_id = 1; bot_id <= get_maxplayers(); bot_id++) {
+        if (botowner[bot_id] == 0 || !is_user_alive(bot_id)) {
+            continue;
+        }
+
+        new owner_id = botowner[bot_id];
+        if (owner_id > 0 && g_is_controlling[owner_id]) {
+            continue;
+        }
+
+        new Float:forward_speed = 0.0;
+        new Float:side_speed = 0.0;
+        new buttons = 0;
+        g_bot_target_id[bot_id] = find_best_monster_target(bot_id);
+        g_bot_has_target[bot_id] = (g_bot_target_id[bot_id] != -1);
+
+        // ESTADO DE COMBATE
+        if (g_bot_has_target[bot_id]) {
+            forward_speed = 0.0;
+            new blocking_ent = get_blocking_entity(bot_id, g_bot_target_id[bot_id]);
+
+            if (blocking_ent == 0) {
+                if (!g_bot_is_attacking[bot_id]) {
+                    g_bot_is_attacking[bot_id] = true;
+                    g_bot_attack_time[bot_id] = get_gametime() + random_float(0.2, 0.6);
+                }
+
+                if (g_bot_attack_time[bot_id] > get_gametime()) {
+                    buttons |= IN_ATTACK;
+                } else {
+                    g_bot_is_attacking[bot_id] = false;
+                }
+            }
+            else {
+                g_bot_is_attacking[bot_id] = false;
+                if (1 <= blocking_ent <= get_maxplayers()) {
+                    // Lógica de evasión (strafe)
+                }
+            }
+        } 
+        // ESTADO DE SEGUIMIENTO / PATRULLA
+        else {
+            g_bot_is_attacking[bot_id] = false;
+            
+            // Comprueba si el modo de seguimiento está activado para el dueño de este bot
+            if (owner_id > 0 && is_user_alive(owner_id) && g_bots_are_following[owner_id]) {
+                // --- INICIO DE LÓGICA DE SEGUIMIENTO ---
+                new Float:bot_origin[3], Float:owner_origin[3];
+                pev(bot_id, pev_origin, bot_origin);
+                pev(owner_id, pev_origin, owner_origin);
+                
+                new Float:distance = get_distance_f(bot_origin, owner_origin);
+                if (distance > 150.0) {
+                    forward_speed = 200.0;
+                    new blocker = get_blocking_entity(bot_id, owner_id);
+                    if (blocker > 0) {
+                        new nav_buttons = handle_obstacle_navigation(bot_id, owner_id);
+                        if (nav_buttons != 0) {
+                            buttons |= nav_buttons;
+                        } else {
+                            side_speed = 200.0;
+                        }
+                    }
+                    
+                    new Float:vec_to_owner[3], Float:follow_angles[3];
+                    vector_subtract(owner_origin, bot_origin, vec_to_owner);
+                    vector_to_angle(vec_to_owner, follow_angles);
+                    
+                    g_bot_angles[bot_id][1] = follow_angles[1]; // Yaw
+                    
+                    new Float:body_angles[3];
+                    body_angles[0] = 0.0;
+                    body_angles[1] = follow_angles[1];
+                    body_angles[2] = 0.0;
+                    set_pev(bot_id, pev_angles, body_angles);
+                }
+                else {
+                    forward_speed = 0.0;
+                }
+                // --- FIN DE LÓGICA DE SEGUIMIENTO ---
+            }
+            else {
+                // --- LÓGICA DE PATRULLA (cuando el seguimiento está desactivado) ---
+                update_patrol_angles(bot_id);
+                forward_speed = 200.0;
+            }
+        }
+
+        engfunc(EngFunc_RunPlayerMove, bot_id, g_bot_angles[bot_id], forward_speed, side_speed, 0.0, buttons, 0, 100);
+    }
+}
+
+// --- CEREBRO 2: PUNTERÍA ---
+public bot_aim_think(bot_id) {
+    if (botowner[bot_id] == 0 || !is_user_alive(bot_id) || !g_bot_has_target[bot_id]) {
+        return;
+    }
+    apply_aim_angles(bot_id, g_bot_target_id[bot_id]);
+}
+
+// --- FUNCIONES DE SOPORTE ---
+stock get_blocking_entity(bot_id, target_id) {
+    new Float:start_pos[3], Float:end_pos[3];
+    get_bot_eye_position(bot_id, start_pos);
+    pev(target_id, pev_origin, end_pos);
+    new trace = create_tr2();
+    engfunc(EngFunc_TraceLine, start_pos, end_pos, DONT_IGNORE_MONSTERS, bot_id, trace);
+    new Float:fraction;
+    get_tr2(trace, TR_flFraction, fraction);
+    if (fraction == 1.0) {
+        free_tr2(trace);
+        return 0;
+    }
+    new hit_entity;
+    get_tr2(trace, TR_pHit, hit_entity);
+    free_tr2(trace);
+    if (hit_entity == target_id) {
+        return 0;
+    }
+    return hit_entity;
+}
+
+stock find_best_monster_target(bot_id) {
+    new Float:closest_dist = 8192.0;
+    new best_target = -1;
+    new Float:bot_pos[3];
+    pev(bot_id, pev_origin, bot_pos);
+    new Float:bot_eye_pos[3];
+    get_bot_eye_position(bot_id, bot_eye_pos);
+    new max_ents = global_get(glb_maxEntities);
+    for (new i = 1; i <= max_ents; i++) {
+        if (!pev_valid(i)) continue;
+        new classname[32];
+        pev(i, pev_classname, classname, charsmax(classname));
+        if (containi(classname, "monster_") != 0) continue;
+        if (equali(classname, "monster_barney") || equali(classname, "monster_gargantua") || equali(classname, "monster_gman") || equali(classname, "monster_scientist") || equali(classname, "monster_cockroach")) continue;
+        if (pev(i, pev_deadflag) != DEAD_NO || pev(i, pev_flags) & FL_NOTARGET) continue;
+        new Float:monster_origin[3];
+        pev(i, pev_origin, monster_origin);
+        if (!is_line_of_sight_clear(bot_eye_pos, monster_origin, bot_id)) continue;
+        new Float:dist = get_distance_f(bot_pos, monster_origin);
+        if (dist < closest_dist) {
+            closest_dist = dist;
+            best_target = i;
+        }
+    }
+    return best_target;
+}
+
+stock apply_aim_angles(bot_id, target_id) {
+    new Float:bot_view_origin[3];
+    get_bot_eye_position(bot_id, bot_view_origin);
+    new Float:target_origin[3];
+    pev(target_id, pev_origin, target_origin);
+    target_origin[2] += 16.0;
+    new Float:vec_to_target[3];
+    vector_subtract(target_origin, bot_view_origin, vec_to_target);
+    new Float:aim_angles[3];
+    vector_to_angle(vec_to_target, aim_angles);
+    aim_angles[0] *= -1.0;
+    set_pev(bot_id, pev_v_angle, aim_angles);
+    new Float:body_angles[3];
+    body_angles[0] = 0.0;
+    body_angles[1] = aim_angles[1];
+    body_angles[2] = 0.0;
+    set_pev(bot_id, pev_angles, body_angles);
+    set_pev(bot_id, pev_fixangle, 1);
+}
+
+stock bool:is_line_of_sight_clear(Float:start[3], Float:end[3], ignore_ent) {
+    new trace = create_tr2();
+    engfunc(EngFunc_TraceLine, start, end, IGNORE_MONSTERS, ignore_ent, trace);
+    new Float:fraction;
+    get_tr2(trace, TR_flFraction, fraction);
+    free_tr2(trace);
+    return fraction == 1.0;
+}
+
+stock update_patrol_angles(bot_id) {
+    static Float:next_patrol_update[33];
+    if (next_patrol_update[bot_id] < get_gametime()) {
+        next_patrol_update[bot_id] = get_gametime() + random_float(1.0, 4.0);
+        g_bot_angles[bot_id][1] = random_float(-180.0, 180.0);
+        g_bot_angles[bot_id][0] = 0.0;
+    }
+}
+
+stock get_bot_eye_position(bot_id, Float:origin[3]) {
+    pev(bot_id, pev_origin, origin);
+    new Float:view_ofs[3];
+    pev(bot_id, pev_view_ofs, view_ofs);
+    vector_add(origin, view_ofs, origin);
+}
+
+/**
+ * Lógica mejorada para superar obstáculos al seguir al dueño.
+ * @param bot_id El ID del bot.
+ * @param owner_id El ID del dueño.
+ * @return El botón de acción a presionar (IN_JUMP, IN_DUCK) o 0 si no hay acción clara.
+ */
+stock handle_obstacle_navigation(bot_id, owner_id) {
+    new Float:bot_origin[3], Float:owner_origin[3], Float:direction[3];
+    pev(bot_id, pev_origin, bot_origin);
+    pev(owner_id, pev_origin, owner_origin);
+    // 1. Calcular el vector de dirección normalizado del bot hacia el dueño
+    vector_subtract(owner_origin, bot_origin, direction);
+    new Float:distance = vector_length(direction);
+    if (distance > 0.0) {
+        direction[0] /= distance;
+        direction[1] /= distance;
+        direction[2] /= distance;
+    }
+
+    new trace = create_tr2();
+    new Float:fraction;
+    new Float:start_pos[3], Float:end_pos[3];
+    new Float:trace_dist = 80.0; // Aumentamos la distancia de chequeo
+
+    // 2. Comprobar si puede saltar por encima
+    get_bot_eye_position(bot_id, start_pos);
+    start_pos[2] += 20.0; // Subimos el punto de inicio para ver si hay espacio arriba
+    
+    end_pos[0] = start_pos[0] + direction[0] * trace_dist;
+    end_pos[1] = start_pos[1] + direction[1] * trace_dist;
+    end_pos[2] = start_pos[2] + direction[2] * trace_dist;
+    
+    engfunc(EngFunc_TraceLine, start_pos, end_pos, IGNORE_MONSTERS, bot_id, trace);
+    get_tr2(trace, TR_flFraction, fraction);
+    
+    if (fraction == 1.0) {
+        free_tr2(trace);
+        return IN_JUMP;
+    }
+
+    // 3. Comprobar si puede agacharse para pasar por debajo
+    get_bot_eye_position(bot_id, start_pos);
+    start_pos[2] -= 18.0; // Bajamos el punto de inicio para ver si hay espacio agachado
+
+    end_pos[0] = start_pos[0] + direction[0] * trace_dist;
+    end_pos[1] = start_pos[1] + direction[1] * trace_dist;
+    end_pos[2] = start_pos[2] + direction[2] * trace_dist;
+
+    engfunc(EngFunc_TraceLine, start_pos, end_pos, IGNORE_MONSTERS, bot_id, trace);
+    get_tr2(trace, TR_flFraction, fraction);
+    free_tr2(trace);
+
+    if (fraction == 1.0) {
+        return IN_DUCK;
+    }
+    
+    // Si ninguna de las dos es posible, no devuelve ninguna acción.
+    return 0;
+}

@@ -1,0 +1,300 @@
+//Only showcase functional, do your own stuff here.
+
+//Setup weapon at respawn.
+public HamF_PlayerSpawn_Post(iPlayer)
+{
+	if(!is_user_alive(iPlayer))
+		return;
+
+	//Spawned in each other?
+	UnstuckPlayer(iPlayer, 32, 128);
+
+	//Autofill server.
+	if(!c_first_player)
+	{
+
+		#if defined PB_AUTOFILL
+
+			server_cmd("apb_fill");
+
+		#endif
+
+		//Draw information.	
+		remove_task(PB_WELCOME_MSG);		
+		set_task(PB_WELCOME_TIMER, "Task_Welcome", PB_WELCOME_MSG);
+
+		c_first_player = true;
+	}
+
+	//Not for CS.
+	if(!RUN_APB_GAME_COUNTERSTRIKE())
+	{	
+		SetProtection(iPlayer);
+
+		//Longjump.
+		Function_SpawnGear(iPlayer, "item_longjump");
+	}	
+
+	//This is pBot.
+	if(c_fakeplayer_edict[iPlayer])
+	{
+		
+		#if defined PB_WEAPON_MODE
+		
+			//Give weapon.
+			Function_SetPrimaryWeapon(iPlayer);			
+	
+			//Add bullets.
+			Function_Bullets(iPlayer);
+				
+		#endif
+			
+	}
+		
+	//This is human.
+	else
+	{
+		#define PB_WEAPONTIMER 0.1
+	
+		remove_task(iPlayer + PB_SPAWNGEAR);
+		set_task(PB_WEAPONTIMER, "Task_GiveWeapon", iPlayer + PB_SPAWNGEAR);
+	}
+}
+
+//Spawn Player gear.
+public Task_GiveWeapon(taskid)
+{
+	new iPlayer = taskid - PB_SPAWNGEAR;
+	
+	#define MAX_GEAR 9
+	#define MAX_ROCKET 10
+
+	if(pev_valid(iPlayer) != PDATA_SAFE)
+		return;
+		
+	//Give weapons.
+	if(RUN_APB_GAME_AGHL())
+	{
+		new iRandom;
+		iRandom = random_num(1, 2);
+
+		switch(iRandom)
+		{
+			case 1: Function_SpawnGear(iPlayer, "weapon_gauss");
+			case 2: Function_SpawnGear(iPlayer, "weapon_egon");
+		}
+
+		Function_SpawnGear(iPlayer, "weapon_9mmAR");
+
+		if(get_cvar_num("apb_hl_rocket") > NULL)
+			Function_SpawnGear(iPlayer, "weapon_rpg");
+		
+		//set_pev(iPlayer, pev_health, 255.0);
+		set_pev(iPlayer, pev_armorvalue, 100.0);
+	}
+
+	switch(c_fakeplayer_game_mod)
+	{			
+		//Gauss cells, AR bullets for Half-Life.
+		case PB_GAME_MOD_HL:
+		{	
+			set_pdata_int(iPlayer, m_rgAmmo_gauss, PB_SUPPLY, CBASE_PLAYER);
+			set_pdata_int(iPlayer, m_rgAmmo_9mmAR, PB_SUPPLY, CBASE_PLAYER);
+			set_pdata_int(iPlayer, m_rgAmmo_9mmAR_grenades, PB_SUPPLY, CBASE_PLAYER);
+
+			if(get_cvar_num("apb_hl_rocket") > NULL)
+				set_pdata_int(iPlayer, m_rgAmmo_rocket, PB_SUPPLY, CBASE_PLAYER);	
+				
+			return;		
+		}		
+			
+		//Gauss cells, AR bullets for Adrenaline Gamer.
+		case PB_GAME_MOD_AG:
+		{	
+			set_pdata_int(iPlayer, m_rgAmmo_gauss_aghl, PB_SUPPLY, CBASE_PLAYER);
+			set_pdata_int(iPlayer, m_rgAmmo_9mmAR_aghl, PB_SUPPLY, CBASE_PLAYER);
+			set_pdata_int(iPlayer, m_rgAmmo_9mmAR_grenades_aghl, PB_SUPPLY, CBASE_PLAYER);
+
+			if(get_cvar_num("apb_hl_rocket") > NULL)
+				set_pdata_int(iPlayer, m_rgAmmo_rocket_aghl, PB_SUPPLY, CBASE_PLAYER);					
+				
+			return;		
+		}			
+
+		//Deathmatch Classic.
+		case PB_GAME_MOD_DMC:
+		{
+			//Give lightning.
+			Function_SpawnGear(iPlayer, "weapon_rocketlauncher");
+			//Function_SpawnGear(iPlayer, "item_artifact_super_damage");
+			Function_SpawnGear(iPlayer, "item_armor3");
+				
+			for(new pGear = 1; pGear < MAX_ROCKET; pGear ++)
+				Function_SpawnGear(iPlayer, "item_rockets");
+				
+			return;	
+		}	
+	}	
+}
+
+//Draw welcome.
+public Task_Welcome(PB_WELCOME_MSG)
+{
+	set_hudmessage(RED, GREEN, BLUE, X_AXIS, Y_AXIS, EFFECTS, FXTIME, HOLDTIME, FADEINTIME, FADEOUTTIME, CHANNEL);	
+	show_hudmessage(NULL, "%s", PB_VERSION);
+
+	client_cmd(NULL, "spk ^"sound/vox/hello.wav^"");		
+}
+
+//Remove godmode
+public Task_RemoveProtection(taskid)
+{
+	new iPlayer = taskid - PB_PROTECTION;
+
+	if(!is_user_connected(iPlayer))
+		return;
+
+	SetRendering(iPlayer);
+
+	set_pev(iPlayer, pev_takedamage, DAMAGE_YES);
+}
+
+//Longjump
+public Task_SetAnimation(taskid)
+{
+	new pBot = taskid - PB_LONGJUMP;
+
+	c_fakeplayer_button[pBot] = IN_FORWARD | IN_DUCK | IN_JUMP;
+}
+
+#if defined PB_WEAPON_SPREAD
+
+	//pBot accuracy.
+	public HamF_Weapon_PrimaryAttack(iEnt)
+	{
+		static iPlayer;
+		iPlayer = get_pdata_cbase(iEnt, m_pPlayer, CBASE_WEAPON);		
+
+		/*pBot holding attack. Because we are making random spray pattern 
+		inside Ragebot, let's disable some engine weapon param*/
+		if(c_fakeplayer_edict[iPlayer])
+		{
+			/*Full accuracy, all bullets hit the same point.
+			Should check with cl_lw turned to 0*/
+			#define FL_ACCURACY 0.0
+
+			set_pev(iPlayer, pev_punchangle, DEFAULT_V_ANGLE);
+
+			//Get rid of default spray pattern.	
+			set_pdata_int(iPlayer, random_seed, NULL, CBASE_PLAYER);
+				
+			//Set accuracy.
+			set_pdata_float(iEnt, m_flAccuracy, FL_ACCURACY, CBASE_WEAPON);
+		}	
+	}
+
+#endif	
+
+//pBot trashtalk.
+public HamF_Killed_Post(iVictim, iKiller, Gib)
+{
+	//Remove this flag.
+	c_fakeplayer_weapon_explosion[iVictim] = false;			
+
+	#if defined PB_TRASHTALK
+
+		//Safe
+		if(!is_user_connected(iVictim) || !is_user_connected(iKiller)) 
+			return;
+
+		//Not a bot.
+		if(!c_fakeplayer_edict[iVictim] || !c_fakeplayer_edict[iKiller])
+			return;
+	
+		//Not against self.	
+		if(iVictim == iKiller)
+			return;
+	
+		//Random trashtalking.
+		new pChat[256], pBotKillerName[32], pBotVictimName[32];		
+	
+		//Generate randomly.	
+		new iRandom;
+		iRandom = random_num(1, 20);
+
+		switch(iRandom)
+		{
+			//Killer trashtalking Victim.
+			case 1:
+			{
+				pBotVictimName = Function_GetPlayerName(iVictim);
+				formatex(pChat, charsmax(pChat), "%s, %s", pBotVictimName, c_bot_chat_a[random(sizeof c_bot_chat_a)]);
+				
+				Function_FakeChat(iKiller, pChat);
+
+				//Delay for killer.
+				c_fakeplayer_chat_delay[iKiller] = get_gametime() + FAKE_PLAYER_CHAT_DELAY;	
+			}
+		
+			//Victim trashtalking Killer.
+			case 5:
+			{
+				pBotKillerName = Function_GetPlayerName(iKiller);
+				formatex(pChat, charsmax(pChat), "%s, %s", pBotKillerName, c_bot_chat_b[random(sizeof c_bot_chat_b)]);
+				
+				Function_FakeChat(iVictim, pChat);
+				
+				//Delay for victim.
+				c_fakeplayer_chat_delay[iVictim] = get_gametime() + FAKE_PLAYER_CHAT_DELAY;
+			}
+		}
+
+	#endif	
+
+}
+
+//Bhop + ma3ix
+public HamF_PlayerJump(pBot)
+{
+	//Not a pBot index. Skip.
+	if(!c_fakeplayer_edict[pBot])
+		return HAM_IGNORED;
+		
+	//pBot is dead.
+	if(!is_user_alive(pBot))
+		return HAM_IGNORED;
+
+	/*set_pev(pBot, pev_oldbuttons, pev(pBot, pev_oldbuttons) & ~IN_JUMP);
+	set_pev(pBot, pev_fuser2, 0.5);*/	
+
+	//Animation control and speedup
+	static Float: fVelocity[3];
+    
+	if(!(pev(pBot, pev_flags) & (FL_ONGROUND | FL_CONVEYOR)))
+		return HAM_IGNORED;
+    
+	pev(pBot, pev_velocity, fVelocity);
+       
+	if(fVelocity[2] < 0.1)	
+		fVelocity[2] += 250.0;
+	
+	if(fVelocity[0] < 0.0)
+		fVelocity[0] -= 50.0;
+	else if(fVelocity[0] > 0.0)
+		fVelocity[0] += 50.0;	
+	
+	//Do ma3ix
+	set_pev(pBot, pev_velocity, fVelocity);
+		
+	new iRandomSequence;	
+	iRandomSequence = random_num(1, 5);
+	
+	switch(iRandomSequence)
+	{
+		case 5: set_pev(pBot, pev_sequence, PLAYER_PLACEHOLDER);
+	}	
+	
+	set_pev(pBot, pev_gaitsequence, PLAYER_JUMP);
+    
+	return HAM_SUPERCEDE;
+}

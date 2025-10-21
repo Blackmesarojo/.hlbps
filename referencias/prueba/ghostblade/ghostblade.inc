@@ -1,0 +1,20 @@
+//External natives
+native player_soldier(iPlayer);
+native player_mutant(iPlayer);
+native player_terminator(iPlayer);
+native player_ghostblade(iPlayer);
+native player_set_model(iPlayer, const iModel[], iModelPath[128]);
+native player_reset_model(iPlayer);
+native player_give_weapon(iPlayer, const iWeapon[]);
+native player_strip_slot(iPlayer, iSlot);
+native player_force_deploy(iPlayer);
+native player_give_bpammo(iPlayer, iAmount, bool: Restore);
+native player_set_viewmodel(iPlayer, const iModelViewmodel[], const iModelWeaponmodel[]);
+native player_no_buyzone(iPlayer);
+native player_weaponstrip(iPlayer);
+native playsound_callback(iPlayer, const iSound[]);
+native player_give_vesthelmet(iPlayer);
+native player_remove_armor(iPlayer);
+native player_hide_money(iPlayer, bool: HideMoney);
+native use_special_character();
+native language_english();   
