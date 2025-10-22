@@ -15,14 +15,25 @@ new bool:plugin_ended;
 new xp[33];
 new neededxp[33];
 new playerlevel[33];
+new rank[33][32];
 new skillpoints[33];
+new medals[35];
 new health[33];
 new armor[33];
-new dist[33];
 new rhealth[33];
 new rarmor[33];
+new rammo[33];
+new gravity[33];
+new speed[33];
+new dist[33];
+new dodge[33];
+new rarmorwait[33];
+new rhealthwait[33];
+new ammowait[33];
+new lastfrags[33];
+new lastDeadflag[33];
+new skillIncrement[33];
 new bool:has_godmode[33];
-new Trie:g_tVips;
 
 // Forwards globales
 forward SCXPM_ApplyPlayerSkills(id);

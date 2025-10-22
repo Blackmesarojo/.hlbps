@@ -1,0 +1,101 @@
+#include <amxmodx>
+#include <amxmisc>
+
+// Funciones de guardado y cargado
+public SCXPM_LoadPlayerData(id) {
+    if(!is_user_connected(id)) return;
+    
+    new name[32];
+    get_user_name(id, name, 31);
+    
+    new vaultkey[64], vaultdata[256];
+    formatex(vaultkey, 63, "%s_scxpm", name);
+    
+    if(get_vaultdata(vaultkey, vaultdata, 255)) {
+        new stats[12][16];
+        parse(vaultdata, 
+            stats[0], 15,  // level
+            stats[1], 15,  // xp
+            stats[2], 15,  // skillpoints
+            stats[3], 15,  // health
+            stats[4], 15,  // armor
+            stats[5], 15,  // rhealth
+            stats[6], 15,  // rarmor
+            stats[7], 15,  // rammo
+            stats[8], 15,  // gravity
+            stats[9], 15,  // speed
+            stats[10], 15, // dist
+            stats[11], 15  // medals
+        );
+        
+        playerlevel[id] = str_to_num(stats[0]);
+        xp[id] = str_to_num(stats[1]);
+        skillpoints[id] = str_to_num(stats[2]);
+        health[id] = str_to_num(stats[3]);
+        armor[id] = str_to_num(stats[4]);
+        rhealth[id] = str_to_num(stats[5]);
+        rarmor[id] = str_to_num(stats[6]);
+        rammo[id] = str_to_num(stats[7]);
+        gravity[id] = str_to_num(stats[8]);
+        speed[id] = str_to_num(stats[9]);
+        dist[id] = str_to_num(stats[10]);
+        medals[id] = str_to_num(stats[11]);
+    } else {
+        // Nuevo jugador - inicializar valores por defecto
+        playerlevel[id] = 1;
+        xp[id] = 0;
+        skillpoints[id] = 0;
+        medals[id] = 0;
+        health[id] = 0;
+        armor[id] = 0;
+        rhealth[id] = 0;
+        rarmor[id] = 0;
+        rammo[id] = 0;
+        gravity[id] = 0;
+        speed[id] = 0;
+        dist[id] = 0;
+    }
+    
+    loaddata[id] = true;
+    neededxp[id] = playerlevel[id] * 500;
+    
+    client_print(id, print_chat, "[SCXPM] Bienvenido %s! Nivel: %d, XP: %d/%d", 
+        name, playerlevel[id], xp[id], neededxp[id]);
+}
+
+public SCXPM_SavePlayerData(id) {
+    if(!is_user_connected(id) || !loaddata[id]) return;
+    
+    new name[32];
+    get_user_name(id, name, 31);
+    
+    new vaultkey[64], vaultdata[256];
+    formatex(vaultkey, 63, "%s_scxpm", name);
+    
+    formatex(vaultdata, 255, "%d %d %d %d %d %d %d %d %d %d %d %d",
+        playerlevel[id],
+        xp[id],
+        skillpoints[id],
+        health[id],
+        armor[id],
+        rhealth[id],
+        rarmor[id],
+        rammo[id],
+        gravity[id],
+        speed[id],
+        dist[id],
+        medals[id]
+    );
+    
+    set_vaultdata(vaultkey, vaultdata);
+}
+
+public SCXPM_SaveAllPlayers() {
+    if(plugin_ended) return;
+    
+    for(new id = 1; id <= 32; id++) {
+        if(is_user_connected(id) && loaddata[id]) {
+            SCXPM_SavePlayerData(id);
+        }
+    }
+}
