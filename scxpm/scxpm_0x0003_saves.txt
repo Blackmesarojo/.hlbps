@@ -1,101 +1,85 @@
-#include <amxmodx>
-#include <amxmisc>
+#if defined _scxpm_saves_included
+    #endinput
+#endif
+#define _scxpm_saves_included
 
-// Funciones de guardado y cargado
-public SCXPM_LoadPlayerData(id) {
-    if(!is_user_connected(id)) return;
+// Constantes para guardado
+#define SAVE_INTERVAL 180.0
+#define VAULT_NAME "scxpm_playerdata"
+
+// Variables locales del módulo
+new g_vault;
+
+public SCXPM_Save_Init()
+{
+    // Inicializar vault
+    g_vault = nvault_open(VAULT_NAME);
     
-    new name[32];
-    get_user_name(id, name, 31);
+    if(g_vault == INVALID_HANDLE)
+    {
+        log_amx("[SCXPM] Error al abrir el vault");
+        return PLUGIN_HANDLED;
+    }
     
-    new vaultkey[64], vaultdata[256];
-    formatex(vaultkey, 63, "%s_scxpm", name);
+    // Purgar datos antiguos
+    nvault_prune(g_vault, 0, get_systime() - (86400 * 30));
     
-    if(get_vaultdata(vaultkey, vaultdata, 255)) {
-        new stats[12][16];
-        parse(vaultdata, 
-            stats[0], 15,  // level
-            stats[1], 15,  // xp
-            stats[2], 15,  // skillpoints
-            stats[3], 15,  // health
-            stats[4], 15,  // armor
-            stats[5], 15,  // rhealth
-            stats[6], 15,  // rarmor
-            stats[7], 15,  // rammo
-            stats[8], 15,  // gravity
-            stats[9], 15,  // speed
-            stats[10], 15, // dist
-            stats[11], 15  // medals
-        );
+    return PLUGIN_CONTINUE;
+}
+
+public SCXPM_PlayerLoad(id)
+{
+    if(!is_user_connected(id))
+        return PLUGIN_HANDLED;
         
-        playerlevel[id] = str_to_num(stats[0]);
-        xp[id] = str_to_num(stats[1]);
-        skillpoints[id] = str_to_num(stats[2]);
-        health[id] = str_to_num(stats[3]);
-        armor[id] = str_to_num(stats[4]);
-        rhealth[id] = str_to_num(stats[5]);
-        rarmor[id] = str_to_num(stats[6]);
-        rammo[id] = str_to_num(stats[7]);
-        gravity[id] = str_to_num(stats[8]);
-        speed[id] = str_to_num(stats[9]);
-        dist[id] = str_to_num(stats[10]);
-        medals[id] = str_to_num(stats[11]);
-    } else {
-        // Nuevo jugador - inicializar valores por defecto
-        playerlevel[id] = 1;
-        xp[id] = 0;
-        skillpoints[id] = 0;
-        medals[id] = 0;
-        health[id] = 0;
-        armor[id] = 0;
-        rhealth[id] = 0;
-        rarmor[id] = 0;
-        rammo[id] = 0;
-        gravity[id] = 0;
-        speed[id] = 0;
-        dist[id] = 0;
+    new authid[35];
+    get_user_authid(id, authid, charsmax(authid));
+    
+    new data[256];
+    if(nvault_get(g_vault, authid, data, charsmax(data)))
+    {
+        new level[12], xp[12], skill_points[12], medals[12];
+        parse(data, level, charsmax(level),
+                    xp, charsmax(xp),
+                    skill_points, charsmax(skill_points),
+                    medals, charsmax(medals));
+                    
+        g_iLevel[id] = str_to_num(level);
+        g_iXP[id] = str_to_num(xp);
+        g_iSkillPoints[id] = str_to_num(skill_points);
+        g_iMedals[id] = str_to_num(medals);
+        
+        g_bLoaded[id] = true;
+    }
+    else
+    {
+        // Datos por defecto para nuevo jugador
+        g_iLevel[id] = 1;
+        g_iXP[id] = 0;
+        g_iSkillPoints[id] = 0;
+        g_iMedals[id] = 0;
+        g_bLoaded[id] = true;
     }
     
-    loaddata[id] = true;
-    neededxp[id] = playerlevel[id] * 500;
-    
-    client_print(id, print_chat, "[SCXPM] Bienvenido %s! Nivel: %d, XP: %d/%d", 
-        name, playerlevel[id], xp[id], neededxp[id]);
+    return PLUGIN_CONTINUE;
 }
 
-public SCXPM_SavePlayerData(id) {
-    if(!is_user_connected(id) || !loaddata[id]) return;
+public SCXPM_PlayerSave(id)
+{
+    if(!is_user_connected(id) || !g_bLoaded[id])
+        return PLUGIN_HANDLED;
+        
+    new authid[35];
+    get_user_authid(id, authid, charsmax(authid));
     
-    new name[32];
-    get_user_name(id, name, 31);
+    new data[256];
+    formatex(data, charsmax(data), "%d %d %d %d",
+        g_iLevel[id],
+        g_iXP[id],
+        g_iSkillPoints[id],
+        g_iMedals[id]);
+        
+    nvault_set(g_vault, authid, data);
     
-    new vaultkey[64], vaultdata[256];
-    formatex(vaultkey, 63, "%s_scxpm", name);
-    
-    formatex(vaultdata, 255, "%d %d %d %d %d %d %d %d %d %d %d %d",
-        playerlevel[id],
-        xp[id],
-        skillpoints[id],
-        health[id],
-        armor[id],
-        rhealth[id],
-        rarmor[id],
-        rammo[id],
-        gravity[id],
-        speed[id],
-        dist[id],
-        medals[id]
-    );
-    
-    set_vaultdata(vaultkey, vaultdata);
-}
-
-public SCXPM_SaveAllPlayers() {
-    if(plugin_ended) return;
-    
-    for(new id = 1; id <= 32; id++) {
-        if(is_user_connected(id) && loaddata[id]) {
-            SCXPM_SavePlayerData(id);
-        }
-    }
+    return PLUGIN_CONTINUE;
 }

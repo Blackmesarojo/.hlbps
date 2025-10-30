@@ -1,0 +1,224 @@
+#include <amxmodx>
+#include <amxmisc>
+#include <fakemeta>
+#include <fun>
+#include <cstrike>
+#include <hamsandwich>
+#include <colorchat>
+
+#define PLUGIN "AFK Auto-Spectator-System"
+#define VERSION "1.0"
+#define AUTHOR "ITS-ZAKI"
+
+// Player tracking data
+new Float:g_player_origin[33][3];
+new Float:g_player_angles[33][3];
+new g_player_afk_counter[33];
+
+// System configuration
+const AFK_TIME_LIMIT = 15;      // Seconds before transfer
+const CHECK_INTERVAL = 2;       // Every few seconds the activity is checked
+
+public plugin_init()
+{
+    register_plugin(PLUGIN, VERSION, AUTHOR);
+    
+    // Events
+    register_event("DeathMsg", "event_player_death", "a");
+    register_logevent("event_round_start", 2, "1=Round_Start");
+    
+    // Menu command
+    register_menucmd(register_menuid("AFK Return Menu"), 1023, "menu_handler");
+    
+    // AFK monitor task
+    set_task(float(CHECK_INTERVAL), "task_monitor_players", 999, "", 0, "b");
+    
+    server_print("[AFK System] Auto-spectator enforcement initialized");
+}
+
+public client_putinserver(id)
+{
+    if(is_user_bot(id))
+        return;
+    
+    reset_player_tracking(id);
+    update_player_position(id);
+}
+
+public client_disconnect(id)
+{
+    reset_player_tracking(id);
+}
+
+public event_player_death()
+{
+    new victim_id = read_data(2);
+    if(victim_id > 0 && victim_id <= 32)
+        reset_player_tracking(victim_id);
+}
+
+public event_round_start()
+{
+    new players[32], player_count;
+    get_players(players, player_count, "ch");
+    
+    for(new i = 0; i < player_count; i++)
+    {
+        new id = players[i];
+        if(!is_user_bot(id))
+        {
+            reset_player_tracking(id);
+            update_player_position(id);
+        }
+    }
+}
+
+public task_monitor_players()
+{
+    new players[32], player_count;
+    get_players(players, player_count, "ach");
+    
+    for(new i = 0; i < player_count; i++)
+    {
+        new id = players[i];
+        
+        if(is_user_bot(id) || !is_user_connected(id) || !is_user_alive(id))
+            continue;
+        
+        if(cs_get_user_team(id) == CS_TEAM_SPECTATOR)
+            continue;
+        
+        process_player_activity(id);
+    }
+}
+
+public process_player_activity(id)
+{
+    new Float:current_origin[3], Float:current_angles[3];
+    pev(id, pev_origin, current_origin);
+    pev(id, pev_angles, current_angles);
+    
+    new bool:movement_detected = false;
+    
+    // Check movement
+    for(new i = 0; i < 3; i++)
+    {
+        if(floatabs(current_origin[i] - g_player_origin[id][i]) > 10.0)
+        {
+            movement_detected = true;
+            break;
+        }
+    }
+    
+    // Check view angles
+    if(!movement_detected)
+    {
+        for(new i = 0; i < 2; i++)
+        {
+            if(floatabs(current_angles[i] - g_player_angles[id][i]) > 2.0)
+            {
+                movement_detected = true;
+                break;
+            }
+        }
+    }
+    
+    if(movement_detected)
+    {
+        reset_player_tracking(id);
+        update_player_position(id);
+    }
+    else
+    {
+        g_player_afk_counter[id]++;
+        
+        if(g_player_afk_counter[id] * CHECK_INTERVAL >= AFK_TIME_LIMIT)
+        {
+            transfer_to_spectator(id);
+        }
+    }
+}
+
+public transfer_to_spectator(id)
+{
+    if(!is_user_connected(id) || is_user_bot(id))
+        return;
+    
+    new player_name[32];
+    get_user_name(id, player_name, charsmax(player_name));
+    
+    if(cs_get_user_team(id) == CS_TEAM_SPECTATOR)
+        return;
+    
+    cs_set_user_team(id, CS_TEAM_SPECTATOR);
+    user_kill(id);
+    
+    reset_player_tracking(id);
+    
+    ColorChat(0, GREEN, "[AFK System] ^3%s ^1was moved to ^4Spectator ^1for inactivity", player_name);
+    
+    // Show return menu
+    show_afk_return_menu(id);
+}
+
+public show_afk_return_menu(id)
+{
+    new menu_body[256];
+    new len;
+    
+    len = formatex(menu_body, charsmax(menu_body), "\yAFK Return Menu^n^n");
+    len += formatex(menu_body[len], charsmax(menu_body) - len, "1. Join Terrorist^n");
+    len += formatex(menu_body[len], charsmax(menu_body) - len, "2. Join Counter-Terrorist^n");
+    len += formatex(menu_body[len], charsmax(menu_body) - len, "0. Stay Spectator^n");
+    
+    show_menu(id, (1<<0)|(1<<1)|(1<<9), menu_body, -1, "AFK Return Menu");
+}
+
+public menu_handler(id, key)
+{
+    if(!is_user_connected(id))
+        return PLUGIN_HANDLED;
+    
+    switch(key)
+    {
+        case 0: {
+            cs_set_user_team(id, CS_TEAM_T);
+            respawn_player(id);
+            ColorChat(id, RED, "[AFK System] You have joined Terrorist team");
+        }
+        case 1: {
+            cs_set_user_team(id, CS_TEAM_CT);
+            respawn_player(id);
+            ColorChat(id, BLUE, "[AFK System] You have joined Counter-Terrorist team");
+        }
+        case 9: {
+            ColorChat(id, GREY, "[AFK System] You chose to stay Spectator");
+        }
+    }
+    return PLUGIN_HANDLED;
+}
+
+public respawn_player(id)
+{
+    if(is_user_alive(id)) return;
+    ExecuteHamB(Ham_CS_RoundRespawn, id);
+}
+
+public reset_player_tracking(id)
+{
+    g_player_afk_counter[id] = 0;
+}
+
+public update_player_position(id)
+{
+    if(!is_user_connected(id))
+        return;
+    
+    pev(id, pev_origin, g_player_origin[id]);
+    pev(id, pev_angles, g_player_angles[id]);
+}
+
+public plugin_end()
+{
+    server_print("[AFK System] Auto-spectator system terminated");
+}

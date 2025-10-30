@@ -1,0 +1,292 @@
+#include <amxmodx>
+#include <cstrike>
+#include <fakemeta>
+#include <hamsandwich>
+
+const XoWeapon 			= 4;
+const XoPlayer         		= 5;
+const m_pPlayer 		= 41;
+const m_flNextPrimaryAttack	= 46;
+const m_flTimeWeaponIdle	= 48;
+const m_fInSpecialReload 	= 55;
+const m_flNextAttack 		= 83;
+const m_pActiveItem 		= 373;
+
+new const PLUGIN[]	= "CS:GO Inspect Weapon";
+new const VERSION[] 	= "5.1.5";
+new const DATE[] 	= "9th Apri1 2020";
+
+new const wpns_without_inspect = (1 << CSW_C4) | (1 << CSW_HEGRENADE) | (1 << CSW_FLASHBANG) | (1 << CSW_SMOKEGRENADE);
+new const wpns_scoped = (1 << CSW_AUG) | (1 << CSW_AWP) | (1 << CSW_G3SG1) | (1 << CSW_SCOUT) | (1 << CSW_SG550) | (1 << CSW_SG552);
+
+new g_deagle_overide[33];
+
+new inspect_anim[] = 
+{
+	0,	//null
+	7,	//p228
+	0,	//shield
+	5,	//scout
+	0,	//hegrenade
+	7,	//xm1014
+	0,	//c4
+	6,	//mac10
+	6,	//aug
+	0,	//smoke grenade
+	16,	//elites
+	6,	//fiveseven
+	6,	//ump45
+	5,	//sg550
+	6,	//galil
+	6,	//famas
+	16,	//usp
+	13,	//glock
+	6,	//awp
+	6,	//mp5
+	5,	//m249
+	7,	//m3
+	14,	//m4a1
+	6,	//tmp
+	5,	//g3sg1
+	0,	//flashbang
+	6,	//deagle
+	6,	//sg552
+	6,	//ak47
+	8,	//knife
+	6	//p90
+}
+
+new Float:idle_calltime[] = 
+{
+	0.0,	//null
+	6.5,	//p228
+	0.0,	//shield
+	5.3,	//scout
+	0.0,	//hegrenade
+	4.6,	//xm1014
+	0.0,	//c4
+	6.5,	//mac10
+	4.4,	//aug
+	0.0,	//smoke grenade
+	4.6,	//elites
+	6.5,	//fiveseven
+	6.9,	//ump45
+	5.3,	//sg550
+	4.6,	//galil
+	6.4,	//famas
+	6.5,	//usp
+	6.5,	//glock
+	5.0,	//awp
+	7.7,	//mp5
+	6.9,	//m249
+	5.6,	//m3
+	5.1,	//m4a1
+	7.4,	//tmp
+	4.5,	//g3sg1
+	0.0,	//flashbang
+	8.5,	//deagle
+	4.4,	//sg552
+	4.6,	//ak47
+	6.3,	//knife
+	5.4	//p90
+}
+
+public plugin_init()
+{
+	register_plugin(PLUGIN, VERSION, "hellmonja");
+	
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_p228",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_scout",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_xm1014",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_mac10",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_aug",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_elite",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_fiveseven","Fw_Weapon_PrimaryAttack",true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_ump45",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_sg550",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_galil",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_famas",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_usp",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_glock18",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_awp",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_mp5navy",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_m249", 	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_m3",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_m4a1",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_tmp",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_g3sg1",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_deagle",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_sg552",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_ak47",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_knife",	"Fw_Weapon_PrimaryAttack", true);
+	RegisterHam(Ham_Weapon_PrimaryAttack, "weapon_p90",	"Fw_Weapon_PrimaryAttack", true);
+
+
+	RegisterHam(Ham_Weapon_SecondaryAttack, "weapon_aug", "Fw_Weapon_SecondaryAttack");
+	RegisterHam(Ham_Weapon_SecondaryAttack, "weapon_awp", "Fw_Weapon_SecondaryAttack");
+	RegisterHam(Ham_Weapon_SecondaryAttack, "weapon_g3sg1", "Fw_Weapon_SecondaryAttack");
+	RegisterHam(Ham_Weapon_SecondaryAttack, "weapon_scout", "Fw_Weapon_SecondaryAttack");
+	RegisterHam(Ham_Weapon_SecondaryAttack, "weapon_sg550", "Fw_Weapon_SecondaryAttack");
+	RegisterHam(Ham_Weapon_SecondaryAttack, "weapon_sg552", "Fw_Weapon_SecondaryAttack");
+
+	RegisterHam(Ham_Item_Deploy, "weapon_deagle", "Fw_Deagle_Disable");
+	RegisterHam(Ham_Weapon_Reload, "weapon_deagle", "Fw_Deagle_Disable");
+	
+	register_clcmd("cl_inspect", "Inspect_Weapon");
+	register_concmd("inspect", "Inspect_Weapon");
+	register_concmd("ver_csgo_inspect", "Code_Version");
+}
+
+public Code_Version(id)
+{
+	console_print(id, "==============================");
+	console_print(id, "%s v%s", PLUGIN, VERSION);
+	console_print(id, "%s", DATE);
+	console_print(id, "==============================");
+}
+
+public Fw_Weapon_PrimaryAttack(weapon)
+{
+	static id;
+	id = get_pdata_cbase(weapon, m_pPlayer, XoWeapon);
+	
+	if(!is_user_alive(id))
+		return
+	
+	new wpn_id = get_user_weapon(id);
+	static model[32];
+	pev(id, pev_viewmodel2, model, 31);
+			
+	switch(wpn_id)
+	{
+		case CSW_DEAGLE:
+			g_deagle_overide[id] = 1;
+		case CSW_AWP, CSW_SCOUT, CSW_M3:
+			set_pdata_float(weapon, m_flTimeWeaponIdle, 1.5, XoWeapon);
+		case CSW_KNIFE:
+			set_pdata_float(weapon, m_flTimeWeaponIdle, 2.0, XoWeapon);
+		default:
+			set_pdata_float(weapon, m_flTimeWeaponIdle, 0.5, XoWeapon);
+	}
+}
+
+public Fw_Weapon_SecondaryAttack(weapon)
+{
+	static id;
+	id = get_pdata_cbase(weapon, m_pPlayer, XoWeapon);
+	new wpn_id = get_user_weapon(id);
+	
+	if(wpns_scoped & (1 << wpn_id) && cs_get_user_zoom(id) <= 1)
+	{
+		set_pev(id, pev_weaponanim, 0);
+	
+		message_begin(MSG_ONE_UNRELIABLE, SVC_WEAPONANIM, {0, 0, 0}, id);
+		write_byte(0);
+		write_byte(pev(id, pev_body));
+		message_end();
+	}
+}
+
+public Fw_Deagle_Disable(weapon)
+{
+	static id;
+	id = get_pdata_cbase(weapon, m_pPlayer, XoWeapon);
+	remove_task(id)
+}
+
+public Deagle_Overide(id)
+{
+	g_deagle_overide[id] = 1;
+	play_inspect(id, 0);
+}
+	
+public Inspect_Weapon(id)
+{
+	if(!is_user_alive(id) || !is_user_connected(id))
+		return PLUGIN_HANDLED
+	
+	if(cs_get_user_zoom(id) > 1)
+		return PLUGIN_HANDLED
+	
+	new wpn_id = get_user_weapon(id);
+	
+	if(wpns_without_inspect & (1 << wpn_id))
+		return PLUGIN_HANDLED
+
+	static weapon; weapon = get_pdata_cbase(id, m_pActiveItem);
+	static Float:flNextAttack; flNextAttack = get_pdata_float(id, m_flNextAttack, XoPlayer);
+	static Float:flNextPrimaryAttack; flNextPrimaryAttack = get_pdata_float(weapon, m_flNextPrimaryAttack, XoWeapon);
+
+	if(flNextAttack <= 0 && flNextPrimaryAttack <= 0)
+	{	
+		static model[32]; pev(id, pev_viewmodel2, model, 31);
+		static anim; anim = inspect_anim[wpn_id];
+		static current_anim; current_anim = pev(get_pdata_cbase(weapon, m_pPlayer, XoWeapon), pev_weaponanim);
+		
+		if(cs_get_user_shield(id) == 1)
+		{
+			switch (wpn_id)
+			{
+				case CSW_KNIFE: anim = random_num(7, 9);
+				case CSW_GLOCK18, CSW_USP, CSW_P228, CSW_DEAGLE, CSW_FIVESEVEN:
+				{
+					anim = 9;
+					
+					if(wpn_id == CSW_DEAGLE)
+					{
+						if(task_exists(id)) remove_task(id);
+						set_task(idle_calltime[wpn_id], "Deagle_Overide", id);
+					}
+				}
+			}
+		}
+		else
+		{
+			switch (wpn_id)
+			{
+				case CSW_USP: if(!cs_get_weapon_silen(weapon)) anim = 17;
+				case CSW_M4A1:if(!cs_get_weapon_silen(weapon)) anim = 15;
+				case CSW_KNIFE: anim = random_num(8, 10);
+				case CSW_DEAGLE:
+				{
+					if(g_deagle_overide[id] == 1)
+					{
+						anim = random_num(6, 10);
+
+						new Float:f_temp;
+						if(anim == 10) f_temp = 8.53;
+						else f_temp = idle_calltime[CSW_DEAGLE]
+						
+						play_inspect(id, anim);
+						remove_task(id);
+						g_deagle_overide[id] = 0;
+						set_task(f_temp, "Deagle_Overide", id);
+						return PLUGIN_CONTINUE
+					}
+				}
+			}
+		}
+		
+		if(wpn_id == CSW_KNIFE && (current_anim == 8 || current_anim == 9 || current_anim == 10 ))
+			return PLUGIN_HANDLED
+		
+		if(!get_pdata_int(weapon, m_fInSpecialReload, 4) && current_anim != anim)
+		{
+			play_inspect(id, anim);
+			set_pdata_float(weapon, m_flTimeWeaponIdle, idle_calltime[wpn_id], XoWeapon);
+			
+		}
+	}
+	
+	return PLUGIN_CONTINUE
+}
+
+play_inspect(id, anim)
+{
+	set_pev(id, pev_weaponanim, anim);
+	
+	message_begin(MSG_ONE_UNRELIABLE, SVC_WEAPONANIM, {0, 0, 0}, id);
+	write_byte(anim);
+	write_byte(pev(id, pev_body));
+	message_end();	
+}

@@ -1,0 +1,677 @@
+#include <amxmodx>
+#include <fakemeta>
+#include <fun>
+#include <hamsandwich>
+#include <cstrike>
+
+#define PLUGIN "CSGO Hostage Mode"
+#define VERSION "1.0"
+#define AUTHOR "mjf_0.0"
+
+// Constants
+#define PICKUP_TIME 2.0
+#define HOSTAGE_MODEL "models/csgo_hostage/hostage.mdl"
+#define CARRY_MODEL "models/csgo_hostage/p_hostage_back.mdl"
+#define MAX_HOSTAGES_PER_CT 1
+#define RESCUE_REWARD 600
+#define CARRY_SLOW_SPEED 180.0
+#define MAX_HOSTAGES 4
+#define HOSTAGE_BACK_CLASSNAME "hostage_back_model"
+
+// Global variables
+new bool:g_bHostageMap;
+new g_iCarryHostageBackEnt[33];
+new bool:g_bSuppressDeathMsg;
+new bool:g_bCarryingHostage[33];
+new g_CarriedHostage[33];
+new Float:g_PickupStartTime[33];
+new bool:g_bTryingPickup[33];
+new Float:g_LastDropTime[33];
+new g_CarryCount[33];
+new gmsgBarTime;
+new bool:g_bRescueEnded;
+new g_RescuedThisRound;
+new g_PendingHostage[33];
+
+new g_HostageEnts[MAX_HOSTAGES];
+new Float:g_HostageOrigins[MAX_HOSTAGES][3];
+new g_HostageCount;
+
+new Float:g_fRoundStartTime;
+
+/* ========== Plugin Initialization ========== */
+public plugin_precache() {
+    precache_model(HOSTAGE_MODEL);
+    precache_model(CARRY_MODEL);
+    precache_sound("events/hostage/hos1resc.wav");
+    precache_sound("radio/hos1resc.wav");
+    precache_sound("radio/ctwin.wav");
+}
+
+public plugin_init() {
+    register_plugin(PLUGIN, VERSION, AUTHOR);
+    
+    // Detect if current map is a hostage map
+    new mapname[32];
+    get_mapname(mapname, charsmax(mapname));
+    g_bHostageMap = (contain(mapname, "cs_") == 0);
+    
+    register_cvar("hostage_save_min", "1");
+    gmsgBarTime = get_user_msgid("BarTime");
+    
+    // Register events and messages
+    register_event("TeamInfo", "event_team_switch", "a");
+    register_message(get_user_msgid("DeathMsg"), "msg_block_deathmsg");
+    register_forward(FM_PlayerPreThink, "fw_PlayerThink");
+    register_forward(FM_Use, "fw_UseHostageBlock", 0);
+    register_logevent("logevent_round_start", 2, "1=Round_Start");
+    register_event("HLTV", "event_new_round", "a", "1=0", "2=0");
+
+    // Register ham hooks
+    RegisterHam(Ham_Use, "hostage_entity", "fw_HostageUse", 1);
+    RegisterHam(Ham_Spawn, "hostage_entity", "fw_HostageSpawn", 1);
+    RegisterHam(Ham_TakeDamage, "hostage_entity", "fw_HostageTakeDamage", 0);
+    RegisterHam(Ham_Killed, "hostage_entity", "fw_HostageKilled", 0);
+    RegisterHam(Ham_Killed, "player", "fw_PlayerKilled", 1);
+    
+    set_task(0.5, "bot_think", _, "", 0, "b");
+}
+
+/* ========== Hostage Back Model Functions ========== */
+public ShowHostageOnBack(id) {
+    if (!is_user_alive(id)) 
+        return;
+
+    RemoveHostageOnBack(id);
+
+    new ent = engfunc(EngFunc_CreateNamedEntity, engfunc(EngFunc_AllocString, "info_target"));
+    if (!ent) 
+        return;
+
+    set_pev(ent, pev_classname, HOSTAGE_BACK_CLASSNAME);
+    set_pev(ent, pev_movetype, MOVETYPE_FOLLOW);
+    set_pev(ent, pev_aiment, id);
+    set_pev(ent, pev_solid, SOLID_NOT);
+    set_pev(ent, pev_rendermode, kRenderNormal);
+    set_pev(ent, pev_renderamt, 255.0);
+
+    engfunc(EngFunc_SetModel, ent, CARRY_MODEL);
+    set_pev(ent, pev_body, 0);
+    set_pev(ent, pev_sequence, 0);
+    set_pev(ent, pev_animtime, get_gametime());
+    set_pev(ent, pev_framerate, 1.0);
+    set_pev(ent, pev_angles, Float:{0.0, 180.0, 0.0});
+
+    g_iCarryHostageBackEnt[id] = ent;
+}
+
+public RemoveHostageOnBack(id) {
+    if (g_iCarryHostageBackEnt[id] && pev_valid(g_iCarryHostageBackEnt[id])) {
+        engfunc(EngFunc_RemoveEntity, g_iCarryHostageBackEnt[id]);
+        g_iCarryHostageBackEnt[id] = 0;
+    }
+}
+
+/* ========== Client Events ========== */
+public client_disconnected(id) {
+    drop_carried_hostage(id);
+    RemoveHostageOnBack(id);
+}
+
+public event_team_switch() {
+    static id, team[2];
+    id = read_data(1);
+    read_data(2, team, charsmax(team));
+
+    if (!equal(team, "CT")) {
+        drop_carried_hostage(id);
+    }
+}
+
+/* ========== Message Handlers ========== */
+public msg_block_deathmsg(msgid, dest, id) {
+    if (g_bSuppressDeathMsg) 
+        return PLUGIN_HANDLED;
+    return PLUGIN_CONTINUE;
+}
+
+/* ========== Round Management ========== */
+public event_new_round() {
+    g_fRoundStartTime = get_gametime();
+
+    for (new id = 1; id <= 32; id++) {
+        if (!is_user_connected(id)) 
+            continue;
+
+        RemoveHostageOnBack(id);
+
+        if (g_bCarryingHostage[id]) {
+            new hostage = g_CarriedHostage[id];
+            if (pev_valid(hostage)) {
+                static Float:origin[3];
+                pev(id, pev_origin, origin);
+                engfunc(EngFunc_SetOrigin, hostage, origin);
+                set_pev(hostage, pev_solid, SOLID_SLIDEBOX);
+                set_pev(hostage, pev_movetype, MOVETYPE_STEP);
+                set_pev(hostage, pev_rendermode, kRenderNormal);
+                set_pev(hostage, pev_renderamt, 255.0);
+                set_pev(hostage, pev_iuser1, 0);
+                set_ent_visibility_to_player(hostage, id, true);
+            }
+
+            g_bCarryingHostage[id] = false;
+            g_CarriedHostage[id] = 0;
+        }
+    }
+}
+
+public logevent_round_start() {
+    set_task(0.5, "initialize_hostages");
+}
+
+public initialize_hostages() {
+    g_HostageCount = 0;
+    new ent = -1;
+    
+    while ((ent = engfunc(EngFunc_FindEntityByString, ent, "classname", "hostage_entity")) != 0) {
+        if (!pev_valid(ent)) 
+            continue;
+
+        if (g_HostageCount < MAX_HOSTAGES) {
+            pev(ent, pev_origin, g_HostageOrigins[g_HostageCount]);
+            g_HostageEnts[g_HostageCount++] = ent;
+        }
+
+        set_pev(ent, pev_effects, pev(ent, pev_effects) & ~EF_NODRAW);
+        set_pev(ent, pev_solid, SOLID_SLIDEBOX);
+        set_pev(ent, pev_movetype, MOVETYPE_STEP);
+        set_pev(ent, pev_iuser1, 0);
+        set_pev(ent, pev_rendermode, kRenderNormal);
+        set_pev(ent, pev_renderamt, 255.0);
+
+        dllfunc(DLLFunc_Spawn, ent);
+    }
+
+    // Reset hostage positions
+    for (new i = 0; i < g_HostageCount; i++) {
+        if (pev_valid(g_HostageEnts[i])) {
+            engfunc(EngFunc_SetOrigin, g_HostageEnts[i], g_HostageOrigins[i]);
+        }
+    }
+
+    // Reset player states
+    for (new id = 1; id <= 32; id++) {
+        if (!is_user_connected(id)) 
+            continue;
+
+        if (g_bCarryingHostage[id]) {
+            new hostage = g_CarriedHostage[id];
+            if (pev_valid(hostage)) {
+                static Float:origin[3];
+                pev(id, pev_origin, origin);
+                engfunc(EngFunc_SetOrigin, hostage, origin);
+                set_pev(hostage, pev_solid, SOLID_SLIDEBOX);
+                set_pev(hostage, pev_movetype, MOVETYPE_STEP);
+                set_pev(hostage, pev_rendermode, kRenderNormal);
+                set_pev(hostage, pev_renderamt, 255.0);
+                set_pev(hostage, pev_iuser1, 0);
+                set_ent_visibility_to_player(hostage, id, true);
+            }
+
+            g_CarriedHostage[id] = 0;
+            g_bCarryingHostage[id] = false;
+        }
+
+        g_bTryingPickup[id] = false;
+        g_LastDropTime[id] = 0.0;
+        g_CarryCount[id] = 0;
+        g_PendingHostage[id] = 0;
+
+        show_bar(id, 0);
+        show_status_icon(id, "hostage", 60, 60, 60);
+    }
+
+    g_RescuedThisRound = 0;
+    g_bRescueEnded = false;
+}
+
+/* ========== Player Think Functions ========== */
+public fw_PlayerThink(id) {
+    if (!is_user_alive(id)) 
+        return;
+
+    static Float:freeze;
+    freeze = get_cvar_float("mp_freezetime");
+    if (get_gametime() - g_fRoundStartTime < freeze) {
+        set_pev(id, pev_velocity, Float:{0.0, 0.0, 0.0});
+        set_pev(id, pev_maxspeed, 1.0);
+        return;
+    }
+
+    if (g_bCarryingHostage[id]) {
+        static Float:origin[3], Float:offset[3];
+        pev(id, pev_origin, origin);
+        offset[0] = origin[0] - 20.0;
+        offset[1] = origin[1];
+        offset[2] = origin[2];
+
+        new hostage = g_CarriedHostage[id];
+        if (pev_valid(hostage)) {
+            engfunc(EngFunc_SetOrigin, hostage, offset);
+            set_pev(hostage, pev_angles, Float:{0.0, 0.0, 0.0});
+        }
+
+        if (is_in_rescue_zone(origin)) {
+            rescue_hostage(id);
+            RemoveHostageOnBack(id);
+        }
+
+        set_pev(id, pev_maxspeed, CARRY_SLOW_SPEED);
+    } else {
+        set_pev(id, pev_maxspeed, 250.0);
+    }
+}
+
+/* ========== Hostage Pickup/Drop Functions ========== */
+public fw_UseHostageBlock(ent, idcaller, idactivator, use_type, Float:value) {
+    if (!pev_valid(ent) || !is_user_alive(idcaller)) 
+        return FMRES_IGNORED;
+
+    static classname[32];
+    pev(ent, pev_classname, classname, charsmax(classname));
+    if (!equal(classname, "hostage_entity")) 
+        return FMRES_IGNORED;
+
+    if (g_bCarryingHostage[idcaller]) 
+        return FMRES_SUPERCEDE;
+
+    return FMRES_IGNORED;
+}
+
+public fw_HostageUse(ent, idcaller, idactivator, use_type, Float:value) {
+    if (!is_user_alive(idcaller) || get_user_team(idcaller) != 2 || g_bRescueEnded)
+        return HAM_SUPERCEDE;
+
+    if (g_bCarryingHostage[idcaller]) {
+        client_print(idcaller, print_center, "You're already carrying a hostage!");
+        return HAM_SUPERCEDE;
+    }
+
+    if (g_bTryingPickup[idcaller] || get_gametime() - g_LastDropTime[idcaller] < 1.0 || g_CarryCount[idcaller] >= MAX_HOSTAGES_PER_CT)
+        return HAM_SUPERCEDE;
+
+    g_bTryingPickup[idcaller] = true;
+    g_PickupStartTime[idcaller] = get_gametime();
+    g_PendingHostage[idcaller] = ent;
+
+    client_print(idcaller, print_center, "Hold USE to pick up the hostage...");
+    show_bar(idcaller, floatround(PICKUP_TIME));
+    set_task(0.1, "show_progress_bar", idcaller, "", 0, "b");
+    return HAM_SUPERCEDE;
+}
+
+public show_progress_bar(id) {
+    if (!is_user_alive(id) || !g_bTryingPickup[id]) 
+        return;
+
+    if (g_bCarryingHostage[id]) {
+        cancel_pickup(id);
+        return;
+    }
+
+    if (!(pev(id, pev_button) & IN_USE)) {
+        cancel_pickup(id);
+        return;
+    }
+
+    new Float:elapsed = get_gametime() - g_PickupStartTime[id];
+    if (elapsed >= PICKUP_TIME) {
+        pickup_hostage(id);
+        remove_task(id);
+        show_bar(id, 0);
+    }
+}
+
+public cancel_pickup(id) {
+    g_bTryingPickup[id] = false;
+    g_PendingHostage[id] = 0;
+    remove_task(id);
+    show_bar(id, 0);
+    client_print(id, print_center, "Hostage pickup cancelled.");
+}
+
+public pickup_hostage(id) {
+    new ent = g_PendingHostage[id];
+    if (!is_user_alive(id) || g_bCarryingHostage[id] || !pev_valid(ent)) 
+        return;
+    
+    g_bTryingPickup[id] = false;
+    g_bCarryingHostage[id] = true;
+    g_CarriedHostage[id] = ent;
+    g_PendingHostage[id] = 0;
+
+    set_pev(ent, pev_movetype, MOVETYPE_NONE);
+    set_pev(ent, pev_solid, SOLID_NOT);
+    set_pev(ent, pev_iuser1, 99);
+    set_pev(ent, pev_target, 0);
+
+    set_pev(ent, pev_renderfx, kRenderFxNone);
+    set_pev(ent, pev_rendermode, kRenderTransTexture);
+    set_pev(ent, pev_renderamt, 255.0);
+
+    show_status_icon(id, "hostage", 0, 160, 255);
+    set_ent_visibility_to_player(ent, id, false);
+
+    client_print(id, print_center, "You picked up the hostage!");
+    ShowHostageOnBack(id);
+
+    give_pickup_rewards(id);
+}
+
+/* ========== Reward Functions ========== */
+give_pickup_rewards(id) {
+    // $300 for the CT who picked up
+    new current_money = cs_get_user_money(id);
+    if (current_money < 16000) {
+        new reward = min(300, 16000 - current_money);
+        cs_set_user_money(id, current_money + reward, 1);
+    }
+
+    // $600 for all CTs
+    for (new i = 1; i <= 32; i++) {
+        if (is_user_alive(i) && get_user_team(i) == 2) {
+            new money = cs_get_user_money(i);
+            if (money < 16000) {
+                new reward = min(600, 16000 - money);
+                cs_set_user_money(i, money + reward, 1);
+            }
+        }
+    }
+}
+
+give_rescue_rewards(id) {
+    // Give RESCUE_REWARD to rescuer
+    new current_money = cs_get_user_money(id);
+    if (current_money < 16000) {
+        new reward = min(RESCUE_REWARD, 16000 - current_money);
+        cs_set_user_money(id, current_money + reward, 1);
+    }
+
+    // Give $600 to all alive CTs
+    for (new i = 1; i <= 32; i++) {
+        if (is_user_alive(i) && get_user_team(i) == 2) {
+            new money = cs_get_user_money(i);
+            if (money < 16000) {
+                new reward = min(600, 16000 - money);
+                cs_set_user_money(i, money + reward, 1);
+            }
+        }
+    }
+}
+
+/* ========== Hostage Rescue Functions ========== */
+public rescue_hostage(id) {
+    if (!is_user_alive(id) || !g_bCarryingHostage[id]) 
+        return;
+
+    g_RescuedThisRound++;
+    new hostage = g_CarriedHostage[id];
+    if (pev_valid(hostage)) {
+        set_pev(hostage, pev_effects, EF_NODRAW);
+        set_pev(hostage, pev_solid, SOLID_NOT);
+        set_pev(hostage, pev_movetype, MOVETYPE_NONE);
+        set_pev(hostage, pev_iuser1, 99);
+        set_ent_visibility_to_player(hostage, id, true);
+    }
+
+    g_CarriedHostage[id] = 0;
+    g_bCarryingHostage[id] = false;
+    g_LastDropTime[id] = get_gametime();
+    g_CarryCount[id]++;
+
+    give_rescue_rewards(id);
+    set_pev(id, pev_frags, float(pev(id, pev_frags)) + 1.0);
+
+    // Play radio sound to all CTs
+    for (new i = 1; i <= 32; i++) {
+        if (is_user_alive(i) && get_user_team(i) == 2) {
+            client_cmd(i, "spk radio/rescued.wav");
+        }
+    }
+
+    client_print(id, print_center, "Hostage has been rescued!");
+    show_status_icon(id, "hostage", 60, 60, 60);
+
+    if (g_RescuedThisRound >= get_cvar_num("hostage_save_min") && !g_bRescueEnded) {
+        g_bRescueEnded = true;
+        set_task(1.0, "end_round_ct_win");
+    }
+}
+
+public end_round_ct_win() {
+    g_bSuppressDeathMsg = true;
+    new frags, deaths;
+    
+    for (new id = 1; id <= 32; id++) {
+        if (is_user_alive(id) && get_user_team(id) == 1) {
+            frags = get_user_frags(id);
+            deaths = cs_get_user_deaths(id);
+            user_kill(id, 1);
+            set_pev(id, pev_frags, float(frags));
+            cs_set_user_deaths(id, deaths);
+        }
+    }
+    g_bSuppressDeathMsg = false;
+}
+
+/* ========== Hostage Entity Functions ========== */
+public fw_HostageSpawn(ent) {
+    if (!pev_valid(ent)) 
+        return HAM_IGNORED;
+
+    engfunc(EngFunc_SetModel, ent, HOSTAGE_MODEL);
+    set_pev(ent, pev_flags, pev(ent, pev_flags) | FL_MONSTER);
+    set_pev(ent, pev_movetype, MOVETYPE_STEP);
+    set_pev(ent, pev_health, 100000.0);
+    return HAM_IGNORED;
+}
+
+public fw_HostageTakeDamage(ent, inflictor, attacker, Float:damage, damagebits) {
+    return HAM_SUPERCEDE;
+}
+
+public fw_HostageKilled(ent, attacker, shouldgib) {
+    return HAM_SUPERCEDE;
+}
+
+/* ========== Player Death Handling ========== */
+public fw_PlayerKilled(id, attacker, shouldgib) {
+    if (!g_bCarryingHostage[id]) 
+        return;
+
+    RemoveHostageOnBack(id);
+    new hostage = g_CarriedHostage[id];
+    if (pev_valid(hostage)) {
+        static Float:death_origin[3];
+        pev(id, pev_origin, death_origin);
+        death_origin[2] -= 20.0;
+        engfunc(EngFunc_SetOrigin, hostage, death_origin);
+        set_pev(hostage, pev_solid, SOLID_SLIDEBOX);
+        set_pev(hostage, pev_movetype, MOVETYPE_STEP);
+        set_pev(hostage, pev_rendermode, kRenderNormal);
+        set_pev(hostage, pev_renderamt, 255.0);
+        set_pev(hostage, pev_iuser1, 0);
+        set_ent_visibility_to_player(hostage, id, true);
+    }
+
+    g_CarriedHostage[id] = 0;
+    g_bCarryingHostage[id] = false;
+    g_bTryingPickup[id] = false;
+    g_LastDropTime[id] = get_gametime();
+    show_bar(id, 0);
+    show_status_icon(id, "hostage", 60, 60, 60);
+}
+
+/* ========== Hostage Drop Functions ========== */
+stock drop_carried_hostage(id) {
+    if (!g_bCarryingHostage[id]) 
+        return;
+
+    new hostage = g_CarriedHostage[id];
+    if (pev_valid(hostage)) {
+        static Float:origin[3];
+        pev(id, pev_origin, origin);
+        engfunc(EngFunc_SetOrigin, hostage, origin);
+        set_pev(hostage, pev_solid, SOLID_SLIDEBOX);
+        set_pev(hostage, pev_movetype, MOVETYPE_STEP);
+        set_pev(hostage, pev_rendermode, kRenderNormal);
+        set_pev(hostage, pev_renderamt, 255.0);
+        set_pev(hostage, pev_iuser1, 0);
+        set_ent_visibility_to_player(hostage, id, true);
+    }
+
+    g_CarriedHostage[id] = 0;
+    g_bCarryingHostage[id] = false;
+    g_bTryingPickup[id] = false;
+    g_LastDropTime[id] = get_gametime();
+    show_bar(id, 0);
+    show_status_icon(id, "hostage", 60, 60, 60);
+    RemoveHostageOnBack(id);
+}
+
+/* ========== Utility Functions ========== */
+stock show_status_icon(id, const icon[], r, g, b) {
+    if (id < 1 || id > 32 || !is_user_connected(id)) 
+        return;
+    
+    message_begin(MSG_ONE, get_user_msgid("StatusIcon"), _, id);
+    write_byte(1);
+    write_string(icon);
+    write_byte(r);
+    write_byte(g);
+    write_byte(b);
+    message_end();
+}
+
+stock show_bar(id, duration) {
+    if (!is_user_connected(id)) 
+        return;
+    message_begin(MSG_ONE, gmsgBarTime, _, id);
+    write_short(duration);
+    message_end();
+}
+
+stock set_ent_visibility_to_player(ent, player, bool:visible) {
+    if (!is_user_connected(player) || !pev_valid(ent)) 
+        return;
+
+    set_pev(ent, pev_rendermode, visible ? kRenderNormal : kRenderTransTexture);
+    set_pev(ent, pev_renderamt, visible ? 255.0 : 0.0);
+}
+
+stock bool:is_in_rescue_zone(Float:origin[3]) {
+    new ent = -1;
+    
+    while ((ent = engfunc(EngFunc_FindEntityByString, ent, "classname", "func_hostage_rescue")) != 0) {
+        static Float:rescue_origin[3], Float:mins[3], Float:maxs[3];
+        pev(ent, pev_origin, rescue_origin);
+        pev(ent, pev_mins, mins);
+        pev(ent, pev_maxs, maxs);
+
+        if (origin[0] >= rescue_origin[0] + mins[0] && origin[0] <= rescue_origin[0] + maxs[0] &&
+            origin[1] >= rescue_origin[1] + mins[1] && origin[1] <= rescue_origin[1] + maxs[1] &&
+            origin[2] >= rescue_origin[2] + mins[2] && origin[2] <= rescue_origin[2] + maxs[2]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+stock bool:find_nearest_hostage(Float:from[3], Float:out[3]) {
+    new Float:min_dist = 99999.0;
+    new bool:found = false;
+
+    for (new i = 0; i < g_HostageCount; i++) {
+        new ent = g_HostageEnts[i];
+        if (!pev_valid(ent) || pev(ent, pev_iuser1) != 0)
+            continue;
+
+        static Float:origin[3];
+        pev(ent, pev_origin, origin);
+
+        new Float:dist = get_distance_f(from, origin);
+        if (dist < min_dist) {
+            min_dist = dist;
+            out[0] = origin[0];
+            out[1] = origin[1];
+            out[2] = origin[2];
+            found = true;
+        }
+    }
+    return found;
+}
+
+stock bool:find_nearest_rescue(Float:from[3], Float:out[3]) {
+    new ent = -1;
+    new Float:min_dist = 99999.0;
+    new bool:found = false;
+
+    while ((ent = engfunc(EngFunc_FindEntityByString, ent, "classname", "func_hostage_rescue")) != 0) {
+        static Float:origin[3];
+        pev(ent, pev_origin, origin);
+
+        new Float:dist = get_distance_f(from, origin);
+        if (dist < min_dist) {
+            min_dist = dist;
+            out[0] = origin[0];
+            out[1] = origin[1];
+            out[2] = origin[2];
+            found = true;
+        }
+    }
+    return found;
+}
+
+/* ========== Bot AI Functions ========== */
+public bot_think() {
+    for (new id = 1; id <= 32; id++) {
+        if (!is_user_alive(id) || !is_user_bot(id) || get_user_team(id) != 2)
+            continue;
+
+        static Float:bot_origin[3];
+        pev(id, pev_origin, bot_origin);
+
+        // Carrying a hostage - move to nearest rescue zone
+        if (g_bCarryingHostage[id]) {
+            static Float:rescue_pos[3];
+            if (find_nearest_rescue(bot_origin, rescue_pos)) {
+                if (get_distance_f(bot_origin, rescue_pos) < 80.0 && is_in_rescue_zone(bot_origin)) {
+                    rescue_hostage(id);
+                    RemoveHostageOnBack(id);
+                }
+            }
+            continue;
+        }
+
+        // Not carrying - move to nearest unclaimed hostage
+        static Float:hostage_pos[3];
+        if (find_nearest_hostage(bot_origin, hostage_pos)) {
+            if (get_distance_f(bot_origin, hostage_pos) < 80.0) {
+                for (new i = 0; i < g_HostageCount; i++) {
+                    new hostage = g_HostageEnts[i];
+                    if (!pev_valid(hostage) || pev(hostage, pev_iuser1) != 0)
+                        continue;
+
+                    static Float:ent_origin[3];
+                    pev(hostage, pev_origin, ent_origin);
+
+                    if (get_distance_f(bot_origin, ent_origin) < 80.0) {
+                        g_PendingHostage[id] = hostage;
+                        pickup_hostage(id);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}

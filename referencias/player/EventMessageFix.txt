@@ -1,0 +1,88 @@
+#include <amxmodx>
+
+new const AUDIOCTWIN[][] =
+{
+	"radio/ctwin.wav"
+}
+
+new const AUDIOTERWIN[][] =
+{
+	"radio/terwin.wav"
+}
+
+new const AUDIOROUNDDRAW[][] =
+{
+	"radio/rounddraw.wav"
+}
+
+new const AUDIOBOMBPLANT[][] =
+{
+	"radio/bombpl.wav"
+}
+
+new const AUDIOBOMBDEF[][] =
+{
+	"radio/bombdef.wav"
+}
+
+new const AUDIORESCUED[][] =
+{
+	"radio/rescued.wav"
+}
+
+new i
+
+public plugin_precache()
+{
+	for(new i=0; i<sizeof AUDIOCTWIN; i++)
+	{
+		precache_sound(AUDIOCTWIN[i])
+		precache_sound(AUDIOTERWIN[i])
+		precache_sound(AUDIOROUNDDRAW[i])
+		precache_sound(AUDIOBOMBPLANT[i])
+		precache_sound(AUDIOBOMBDEF[i])
+		precache_sound(AUDIORESCUED[i])
+	}
+}
+
+
+public plugin_init()
+{
+    // Hook win team
+    register_logevent("Event_CTWin", 6, "3=CTs_Win", "3=All_Hostages_Rescued")
+    register_logevent("Event_TerroristWin" , 6, "3=Terrorists_Win", "3=Target_Bombed")
+    register_logevent("Event_Draw" , 4, "1=Round_Draw")
+	register_logevent("Event_Bombplant", 3, "2=Planted_The_Bomb")
+	register_logevent("Event_Bombdef", 3, "2=Defused_The_Bomb")
+	register_logevent("Event_Rescued", 3, "2=Rescued_A_Hostage") 
+}
+
+public Event_CTWin(id)
+{
+    client_cmd(0, "spk %s", AUDIOCTWIN[i])
+}
+
+public Event_TerroristWin(id)
+{
+    client_cmd(0, "spk %s", AUDIOTERWIN[i])
+}
+
+public Event_Draw(id)
+{
+    client_cmd(0, "spk %s", AUDIOROUNDDRAW[i])
+}  
+
+public Event_Bombplant(id)
+{
+    client_cmd(0, "spk %s", AUDIOBOMBPLANT[i])
+}
+
+public Event_Bombdef(id)
+{
+    client_cmd(0, "spk %s", AUDIOBOMBDEF[i])
+}  
+
+public Event_Rescued(id)
+{
+    client_cmd(0, "spk %s", AUDIORESCUED[i])
+}  

@@ -1,125 +1,57 @@
-// scxpm_0x0001_settings.sma
-#include <amxmodx>
-#include <amxmisc>
+#if defined _scxpm_settings_included
+    #endinput
+#endif
+#define _scxpm_settings_included
 
-// Archivo de VIPs
-#define VIP_FILE "data/scxpm_vips.ini"
+// Definiciones de configuración
+#define MAX_PLAYERS 32
+#define MAX_SKILL_LEVEL 50
+#define MAX_PLAYER_LEVEL 1800
+#define DEFAULT_XP_MULTIPLIER 1.0
 
-// Variables para cvars
-new g_save;
-new g_saveStyle;
-new g_minPlaytime;
-new g_debug;
-new g_gamename;
+// Variables locales del módulo
+new g_pcvar_GameName;
+new g_pcvar_MinPlayTime;
+new g_pcvar_HUDChannel;
+new g_pcvar_SaveFrequent;
+new g_pcvar_XPGain;
+new g_pcvar_MaxLevel;
 
-// Forward declarations
-forward SCXPM_CheckLevelUp(id);
-forward SCXPM_UpdateNeededXP(id);
-
-public SCXPM_Settings_Init() {
-    // Registrar CVARs principales
-    g_save = register_cvar("scxpm_save", "1");
-    g_saveStyle = register_cvar("scxpm_savestyle", "2");
-    g_minPlaytime = register_cvar("scxpm_minplaytime", "0");
-    g_debug = register_cvar("scxpm_debug", "0");
-    g_gamename = register_cvar("scxpm_gamename", "1");
+public SCXPM_Settings_Init()
+{
+    // Registrar CVars
+    g_pcvar_GameName = register_cvar("scxpm_gamename", "1");
+    g_pcvar_MinPlayTime = register_cvar("scxpm_minplaytime", "0");
+    g_pcvar_HUDChannel = register_cvar("scxpm_hud_channel", "3");
+    g_pcvar_SaveFrequent = register_cvar("scxpm_save_frequent", "1");
+    g_pcvar_XPGain = register_cvar("scxpm_xpgain", "1.0");
+    g_pcvar_MaxLevel = register_cvar("scxpm_maxlevel", "1800");
     
-    // Cargar VIPs al inicio
-    load_vips();
-}
-
-public SCXPM_Settings_End() {
-    if(get_pcvar_num(g_save) == 1) {
-        save_vips();
-    }
-}
-
-// Sistema VIP
-public load_vips() {
-    if(!file_exists(VIP_FILE))
-        return;
+    // Configurar nombre del juego
+    formatex(g_GameName, charsmax(g_GameName), "SCXPM v%s", VERSION);
     
-    new f = fopen(VIP_FILE, "rt");
-    if(!f) return;
-    
-    new szData[35], szName[32];
-    
-    while(!feof(f)) {
-        fgets(f, szData, charsmax(szData));
-        trim(szData);
-        
-        if(szData[0] && szData[0] != ';' && szData[0] != '#' && strlen(szData) > 2) {
-            copy(szName, charsmax(szName), szData);
-            for(new id = 1; id <= 32; id++) {
-                if(!is_user_connected(id)) continue;
-                
-                new name[32];
-                get_user_name(id, name, charsmax(name));
-                if(equal(name, szName)) {
-                    is_vip[id] = true;
-                    break;
-                }
-            }
-        }
-    }
-    
-    fclose(f);
+    return PLUGIN_CONTINUE;
 }
 
-public save_vips() {
-    new f = fopen(VIP_FILE, "wt");
-    if(!f) return;
-    
-    new name[32];
-    
-    for(new id = 1; id <= 32; id++) {
-        if(!is_user_connected(id) || !is_vip[id])
-            continue;
-        
-        get_user_name(id, name, charsmax(name));
-        fprintf(f, "%s^n", name);
-    }
-    
-    fclose(f);
+// Funciones de utilidad para settings
+stock get_scxpm_setting(const setting[])
+{
+    new cvar = get_cvar_pointer(setting);
+    return (cvar) ? get_pcvar_num(cvar) : 0;
 }
 
-// Funciones auxiliares
-stock bool:check_vip(id) {
-    return is_vip[id];
+stock Float:get_scxpm_setting_float(const setting[])
+{
+    new cvar = get_cvar_pointer(setting);
+    return (cvar) ? get_pcvar_float(cvar) : 0.0;
 }
 
-public get_save_style() {
-    return get_pcvar_num(g_saveStyle);
+stock bool:is_save_enabled()
+{
+    return get_pcvar_num(g_pcvar_SaveFrequent) ? true : false;
 }
 
-public is_debug_enabled() {
-    return get_pcvar_num(g_debug);
-}
-
-public get_min_playtime() {
-    return get_pcvar_num(g_minPlaytime);
-}
-
-public is_saving_enabled() {
-    return get_pcvar_num(g_save) == 1;
-}
-
-// Funciones requeridas por otros módulos
-public SCXPM_UpdateNeededXP(id) {
-    neededxp[id] = playerlevel[id] * 500;
-}
-
-public SCXPM_CheckLevelUp(id) {
-    if(xp[id] >= neededxp[id]) {
-        playerlevel[id]++;
-        skillpoints[id]++;
-        xp[id] -= neededxp[id];
-        SCXPM_UpdateNeededXP(id);
-        
-        client_print(id, print_chat, "[SCXPM] ¡Subiste al nivel %d! Tienes %d punto(s) de habilidad.", 
-            playerlevel[id], skillpoints[id]);
-        
-        return 1;
-    }
-    return 0;
+stock Float:get_xp_multiplier()
+{
+    return get_pcvar_float(g_pcvar_XPGain);
 }

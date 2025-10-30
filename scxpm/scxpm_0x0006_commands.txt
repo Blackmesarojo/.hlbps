@@ -1,139 +1,91 @@
-// scxpm_0x0006_commands.sma
-// Sistema de comandos administrativos y de usuario
+#if defined _scxpm_commands_included
+    #endinput
+#endif
+#define _scxpm_commands_included
 
-SCXPM_Commands_Init() {
-    // Comandos de chat
-    register_clcmd("say /skills", "SCXPM_SkillsMenu");
-    register_clcmd("say /habilidades", "SCXPM_SkillsMenu");
-    register_clcmd("say /nivel", "SCXPM_ShowLevel");
-    register_clcmd("say /xp", "SCXPM_ShowLevel");
-    register_clcmd("say /reset", "SCXPM_ResetSkills");
+public SCXPM_Commands_Init()
+{
+    // Comandos de usuario
+    register_clcmd("say /selectskills", "SCXPM_SelectSkills");
+    register_clcmd("say /resetskills", "SCXPM_ResetSkills");
+    register_clcmd("say /playerskills", "SCXPM_PlayerSkills");
+    register_clcmd("say /skillsinfo", "SCXPM_SkillsInfo");
     
-    // Comandos administrativos
-    register_concmd("amx_setlevel", "SCXPM_AdminSetLevel", ADMIN_LEVEL_A, "<nombre> <nivel>");
-    register_concmd("amx_addxp", "SCXPM_AdminAddXP", ADMIN_LEVEL_A, "<nombre> <xp>");
-    register_concmd("amx_resetxp", "SCXPM_AdminResetXP", ADMIN_LEVEL_A, "<nombre>");
-    register_concmd("amx_godmode", "SCXPM_AdminGodMode", ADMIN_LEVEL_A, "<nombre>");
+    // Comandos de admin
+    register_concmd("scxpm_setlevel", "SCXPM_SetLevel", ADMIN_IMMUNITY);
+    register_concmd("scxpm_addmedal", "SCXPM_AddMedal", ADMIN_IMMUNITY);
+    register_concmd("scxpm_removemedal", "SCXPM_RemoveMedal", ADMIN_IMMUNITY);
+    
+    return PLUGIN_CONTINUE;
 }
 
-public SCXPM_AdminSetLevel(const id, const level, const cid) {
-    if(!cmd_access(id, ADMIN_LEVEL_A, cid, 3)) {
+public SCXPM_SelectSkills(id)
+{
+    if(!is_user_connected(id) || !g_bLoaded[id])
+        return PLUGIN_HANDLED;
+        
+    if(g_iSkillPoints[id] < 1)
+    {
+        client_print(id, print_chat, "[SCXPM] No tienes puntos de habilidad disponibles.");
         return PLUGIN_HANDLED;
     }
     
-    new target[32], level_str[8];
-    read_argv(1, target, 31);
-    read_argv(2, level_str, 7);
-    
-    new const player = cmd_target(id, target, CMDTARGET_ALLOW_SELF);
-    if(!player) return PLUGIN_HANDLED;
-    
-    new const newlevel = str_to_num(level_str);
-    if(newlevel < 1 || newlevel > get_cvar_num("scxpm_maxlevel")) {
-        client_print(id, print_console, "[SCXPM] Nivel invalido (1-%d)", get_cvar_num("scxpm_maxlevel"));
-        return PLUGIN_HANDLED;
-    }
-    
-    playerlevel[player] = newlevel;
-    skillpoints[player] = newlevel;
-    xp[player] = 0;
-    SCXPM_UpdateNeededXP(player);
-    
-    new admin_name[32], player_name[32];
-    get_user_name(id, admin_name, 31);
-    get_user_name(player, player_name, 31);
-    
-    client_print(0, print_chat, "[SCXPM] Admin %s establecio el nivel de %s a %d", admin_name, player_name, newlevel);
-    SCXPM_SavePlayerData(player);
-    
-    return PLUGIN_HANDLED;
+    show_skills_menu(id);
+    return PLUGIN_CONTINUE;
 }
 
-public SCXPM_AdminAddXP(const id, const level, const cid) {
-    if(!cmd_access(id, ADMIN_LEVEL_A, cid, 3)) {
+public SCXPM_ResetSkills(id)
+{
+    if(!is_user_connected(id) || !g_bLoaded[id])
         return PLUGIN_HANDLED;
+        
+    // Resetear habilidades
+    for(new skill = 1; skill <= MAX_SKILLS; skill++)
+    {
+        g_iSkillPoints[id] += g_iPlayerSkills[id][skill];
+        g_iPlayerSkills[id][skill] = 0;
     }
     
-    new target[32], xp_str[16];
-    read_argv(1, target, 31);
-    read_argv(2, xp_str, 15);
+    SCXPM_ApplySkills(id);
+    client_print(id, print_chat, "[SCXPM] Tus habilidades han sido reseteadas. Tienes %d puntos disponibles.", g_iSkillPoints[id]);
     
-    new const player = cmd_target(id, target, CMDTARGET_ALLOW_SELF);
-    if(!player) return PLUGIN_HANDLED;
-    
-    new const addxp = str_to_num(xp_str);
-    if(addxp <= 0) {
-        client_print(id, print_console, "[SCXPM] XP invalido (debe ser > 0)");
-        return PLUGIN_HANDLED;
-    }
-    
-    xp[player] += addxp;
-    
-    new admin_name[32], player_name[32];
-    get_user_name(id, admin_name, 31);
-    get_user_name(player, player_name, 31);
-    
-    client_print(0, print_chat, "[SCXPM] Admin %s anadio %d XP a %s", admin_name, addxp, player_name);
-    
-    if(SCXPM_CheckLevelUp(player)) {
-        SCXPM_ApplyPlayerSkills(player);
-    }
-    
-    return PLUGIN_HANDLED;
+    return PLUGIN_CONTINUE;
 }
 
-public SCXPM_AdminResetXP(const id, const level, const cid) {
-    if(!cmd_access(id, ADMIN_LEVEL_A, cid, 2)) {
+public SCXPM_SetLevel(id, level, target)
+{
+    if(!is_user_connected(id) || !(get_user_flags(id) & ADMIN_IMMUNITY))
+        return PLUGIN_HANDLED;
+        
+    if(!is_user_connected(target))
+    {
+        client_print(id, print_chat, "[SCXPM] Jugador no válido.");
         return PLUGIN_HANDLED;
     }
     
-    new target[32];
-    read_argv(1, target, 31);
+    g_iLevel[target] = level;
+    g_iSkillPoints[target] += level - g_iLevel[target];
     
-    new const player = cmd_target(id, target, CMDTARGET_ALLOW_SELF);
-    if(!player) return PLUGIN_HANDLED;
+    client_print(id, print_chat, "[SCXPM] Has establecido el nivel %d al jugador.", level);
+    client_print(target, print_chat, "[SCXPM] Un admin ha establecido tu nivel a %d.", level);
     
-    // Resetear stats
-    playerlevel[player] = 1;
-    xp[player] = 0;
-    skillpoints[player] = 1;
-    health[player] = 0;
-    armor[player] = 0;
-    rhealth[player] = 0;
-    rarmor[player] = 0;
-    dist[player] = 0;
-    
-    SCXPM_UpdateNeededXP(player);
-    
-    new admin_name[32], player_name[32];
-    get_user_name(id, admin_name, 31);
-    get_user_name(player, player_name, 31);
-    
-    client_print(0, print_chat, "[SCXPM] Admin %s reseteo el XP de %s", admin_name, player_name);
-    SCXPM_SavePlayerData(player);
-    
-    return PLUGIN_HANDLED;
+    return PLUGIN_CONTINUE;
 }
 
-public SCXPM_AdminGodMode(const id, const level, const cid) {
-    if(!cmd_access(id, ADMIN_LEVEL_A, cid, 2)) {
-        return PLUGIN_HANDLED;
-    }
+// Menú de habilidades
+show_skills_menu(id)
+{
+    new menu[512], len;
     
-    new target[32];
-    read_argv(1, target, 31);
+    len = formatex(menu, charsmax(menu), "\yMenú de Habilidades^n");
+    len += formatex(menu[len], charsmax(menu) - len, "\wPuntos disponibles: %d^n^n", g_iSkillPoints[id]);
     
-    new const player = cmd_target(id, target, CMDTARGET_ALLOW_SELF);
-    if(!player) return PLUGIN_HANDLED;
+    len += formatex(menu[len], charsmax(menu) - len, "\r1. \wSalud Extra \y[%d/50]^n", g_iPlayerSkills[id][SKILL_HEALTH]);
+    len += formatex(menu[len], charsmax(menu) - len, "\r2. \wArmadura Extra \y[%d/50]^n", g_iPlayerSkills[id][SKILL_ARMOR]);
+    len += formatex(menu[len], charsmax(menu) - len, "\r3. \wRegeneración HP \y[%d/50]^n", g_iPlayerSkills[id][SKILL_REGEN_HP]);
+    len += formatex(menu[len], charsmax(menu) - len, "\r4. \wRegeneración AP \y[%d/50]^n", g_iPlayerSkills[id][SKILL_REGEN_AP]);
+    len += formatex(menu[len], charsmax(menu) - len, "\r5. \wDistancia \y[%d/50]^n", g_iPlayerSkills[id][SKILL_DISTANCE]);
     
-    has_godmode[player] = !has_godmode[player];
-    
-    new admin_name[32], player_name[32];
-    get_user_name(id, admin_name, 31);
-    get_user_name(player, player_name, 31);
-    
-    client_print(0, print_chat, "[SCXPM] Admin %s %s godmode a %s", 
-        admin_name, has_godmode[player] ? "activo" : "desactivo", player_name);
-    
+    show_menu(id, (1<<0)|(1<<1)|(1<<2)|(1<<3)|(1<<4)|(1<<9), menu, -1, "Skills Menu");
     return PLUGIN_HANDLED;
 }

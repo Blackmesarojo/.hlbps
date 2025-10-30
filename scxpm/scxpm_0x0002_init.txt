@@ -1,6 +1,6 @@
 // scxpm_0x0002_init.sma
 
-SCXPM_Init() {
+public SCXPM_Init() {
     // Crear directorio si no existe
     if(!dir_exists("addons/amxmodx/data/scxpm")) {
         mkdir("addons/amxmodx/data/scxpm");
@@ -21,10 +21,12 @@ SCXPM_Init() {
     
     // Iniciar HUD task
     set_task(1.0, "SCXPM_UpdateHUD", 0, "", 0, "b");
+    
+    return PLUGIN_CONTINUE;
 }
 
-SCXPM_InitializePlayer(const id) {
-    if(!is_user_connected(id)) return;
+public SCXPM_InitializePlayer(const id) {
+    if(!is_user_connected(id)) return PLUGIN_CONTINUE;
     
     // Inicializar valores por defecto
     loaddata[id] = false;
@@ -44,6 +46,8 @@ SCXPM_InitializePlayer(const id) {
     
     // Iniciar HUD para este jugador
     set_task(1.0, "SCXPM_UpdateHUD", id + 100000, "", 0, "b");
+    
+    return PLUGIN_CONTINUE;
 }
 
 public SCXPM_ResetHud(const id) {

@@ -1,0 +1,860 @@
+﻿/* ammx编写头版 by Rex*/
+
+#include <amxmodx>
+#include <fakemeta>
+#include <hamsandwich>
+#include <xs>
+
+#define PLUGIN "RPG-Bear"
+#define VERSION "1.0"
+#define AUTHOR "REX"
+#define WEAPON_ID 1387315
+#define WEAPON_CLASS "weapon_awp"
+#define WEAPON_CLASS2 CSW_AWP
+
+#define KICK_DAMAGE 40.0
+#define KICK_RADIUS 80.0
+#define KICK_POINT_DIS 40.0
+#define KICK_VELOCITY 10000.0
+
+new const models[][] = {"models/rpgbear/v_rpg.mdl", "models/rpgbear/w_rpg.mdl", "models/rpgbear/p_rpg.mdl", "models/rpgbear/w_rpggrenade.mdl"}
+new const sounds[][] = {"weapons/rpgbear/weapon_rpg7_fire.wav", "weapons/rpgbear/hit_in.wav", "weapons/rpgbear/hit_miss.wav", "weapons/rpgbear/weapon_rpg7_reload.wav", "weapons/rpgbear/weapon_rpg7_select_n.wav"}
+new const breakmodels[][] = {"models/rpgbear/gibs_wallbrown.mdl", "models/rpgbear/gibs_woodplank.mdl", "models/rpgbear/gibs_brickred.mdl"}
+new const sprites[][] = {"sprites/rpgbear/rpgexplode.spr", "sprites/rpgbear/rpgsmoke.spr", "sprites/rpgbear/black_smoke3.spr"}
+
+new mdl_break[3], spr_light, spr_smoke1, spr_smoke2, spr_blood_spray, spr_blood_drop
+new cvar_recoil, cvar_damage, cvar_range, cvar_reload, cvar_deploy, cvar_ammo
+new HookClipBug[33], HookReloadBug[33]
+
+new const WeaponCost = 10000                //购买费用
+new const WeaponName[] = "RPG-Bear"               //物品名称
+
+public plugin_init()
+{
+    register_plugin(PLUGIN, VERSION, AUTHOR)
+    register_clcmd("buy_rpg7", "BuyWeapon")
+    register_message(get_user_msgid("CurWeapon"), "Message_CurWeapon")
+    register_forward(FM_SetModel, "fw_SetModel")
+    register_forward(FM_UpdateClientData, "fw_UpdateClientData_Post", 1)
+    register_forward(FM_TraceLine, "fw_TraceLine_Post", 1)
+    RegisterHam(Ham_Weapon_PrimaryAttack, WEAPON_CLASS, "fw_Weapon_PrimaryAttack")
+    RegisterHam(Ham_Weapon_SecondaryAttack, WEAPON_CLASS, "fw_Weapon_SecondaryAttack")
+    RegisterHam(Ham_Item_PostFrame, WEAPON_CLASS, "fw_Weapon_PostFrame")
+    RegisterHam(Ham_Item_Deploy, WEAPON_CLASS, "fw_ItemDeploy_Post", 1)
+    RegisterHam(Ham_Weapon_Reload, WEAPON_CLASS, "fw_Weapon_Reload")
+    RegisterHam(Ham_Weapon_Reload, WEAPON_CLASS, "fw_Weapon_Reload_Post", 1)
+    RegisterHam(Ham_Touch, "info_target", "fw_Touch")
+    RegisterHam(Ham_Touch, "info_target", "fw_Touch_Post", 1)
+    RegisterHam(Ham_Think, "info_target", "fw_Think")
+
+    cvar_recoil = register_cvar("rpg_recoil", "4.0")            //后坐力
+    cvar_damage = register_cvar("rpg_damage", "1500.0")        //伤害
+    cvar_range = register_cvar("rpg_range", "100.0")             //爆炸范围
+    cvar_ammo = register_cvar("rpg_ammo", "20")                  //子弹数量
+    cvar_reload = register_cvar("rpg_reload", "3.2")            //上弹速度
+    cvar_deploy = register_cvar("rpg_deploy", "0.8")            //切换速度
+}
+
+public plugin_precache()
+{
+    for(new i = 0; i < sizeof models; i ++) engfunc(EngFunc_PrecacheModel, models[i])
+    for(new i = 0; i < sizeof sounds; i ++) engfunc(EngFunc_PrecacheSound, sounds[i])
+    for(new i = 0; i < sizeof breakmodels; i ++) mdl_break[i] = engfunc(EngFunc_PrecacheModel, breakmodels[i])
+
+    spr_light = engfunc(EngFunc_PrecacheModel, sprites[0])
+    spr_smoke1 = engfunc(EngFunc_PrecacheModel, sprites[1])
+    spr_smoke2 = engfunc(EngFunc_PrecacheModel, sprites[2])
+    spr_blood_spray = engfunc(EngFunc_PrecacheModel, "sprites/bloodspray.spr")
+    spr_blood_drop = engfunc(EngFunc_PrecacheModel, "sprites/blood.spr")
+}
+
+public BuyWeapon(iPlayer)
+{
+    new money = get_pdata_int(iPlayer, 115)
+    if(money < WeaponCost)
+    {
+        client_print(iPlayer, print_chat, "不够金钱!")
+        return PLUGIN_HANDLED
+    }
+    
+    DropWeapons(iPlayer, 1)
+    
+    static netname[64]
+    pev(iPlayer, pev_netname, netname, charsmax(netname))
+    client_print(0, print_chat, "%s购买了一把%s!", netname, WeaponName)
+    
+    set_pdata_int(iPlayer, 115, money - WeaponCost)
+    message_begin(MSG_ONE, get_user_msgid("Money"), {0,0,0}, iPlayer)
+    write_long(money)
+    write_byte(1)
+    message_end()
+    
+    new iEntity = fm_give_item(iPlayer, WEAPON_CLASS)
+    set_pev(iEntity, pev_weapons, WEAPON_ID)
+    set_pdata_int(iEntity, 51, 1, 4)
+    set_pdata_int(iPlayer, 376+get_pdata_int(iEntity, 49, 4), get_pcvar_num(cvar_ammo), 4)
+    
+    return PLUGIN_HANDLED
+}
+
+public Message_CurWeapon(msg_id, msg_dest, iPlayer)
+{
+    if(get_msg_arg_int(2) != WEAPON_CLASS2)
+    return PLUGIN_CONTINUE
+    
+    new iEntity = get_pdata_cbase(iPlayer, 373)
+    if(iEntity <= 0)
+    return PLUGIN_CONTINUE
+    
+    if(pev(iEntity, pev_weapons) != WEAPON_ID)
+    return PLUGIN_CONTINUE
+    
+    set_pev(iPlayer, pev_weaponmodel2, models[2])
+    
+    if(get_pdata_int(iPlayer, 363, 5) >= 90)
+    {
+        set_pev(iPlayer, pev_viewmodel2, models[0])
+        return PLUGIN_CONTINUE
+    }
+    
+    set_pev(iPlayer, pev_viewmodel2, 0)
+    
+    return PLUGIN_CONTINUE
+}
+
+public fw_SetModel(iEntity, szModel[])
+{
+    if(strcmp(szModel, "models/w_awp.mdl"))
+    return FMRES_IGNORED
+    
+    static szClassName[32]
+    pev(iEntity, pev_classname, szClassName, charsmax(szClassName))
+    
+    if(strcmp(szClassName, "weaponbox"))
+    return FMRES_IGNORED
+    
+    new iEntity2 = get_pdata_cbase(iEntity, 35, 4)
+    
+    if(!iEntity2)
+    return FMRES_IGNORED
+    
+    if(pev(iEntity2, pev_weapons) != WEAPON_ID)
+    return FMRES_IGNORED
+    
+    engfunc(EngFunc_SetModel, iEntity, models[1])
+    
+    return FMRES_SUPERCEDE
+}
+
+public fw_UpdateClientData_Post(iPlayer, iSendWeapon, CD_Handle)
+{
+    if(get_cd(CD_Handle, CD_DeadFlag) != DEAD_NO)
+    return
+    
+    if(get_cd(CD_Handle, CD_ID) != WEAPON_CLASS2)
+    return
+    
+    new iEntity = get_pdata_cbase(iPlayer, 373)
+    if(iEntity <= 0)
+    return
+    
+    if(pev(iEntity, pev_weapons) != WEAPON_ID)
+    return
+    
+    set_cd(CD_Handle, CD_iUser3, 0)
+}
+
+public fw_TraceLine_Post(Float:vecStart[3], Float:vecEnd[3], iConditions, iPlayer, iTrace)
+{
+    if(!is_user_connected(iPlayer))
+    return
+    
+    if(!is_user_bot(iPlayer))
+    return
+    
+    new iEntity = get_pdata_cbase(iPlayer, 373)
+    
+    if(iEntity <= 0)
+    return
+    
+    if(pev(iEntity, pev_weapons) != WEAPON_ID)
+    return
+    
+    new iEnemy = get_tr2(iTrace, TR_pHit)
+    if(!is_user_alive(iEnemy))
+    return
+    
+    if(get_pdata_int(iPlayer, 114, 5) == get_pdata_int(iEnemy, 114, 5))
+    return
+    
+    new Float:origin[3]
+    get_tr2(iTrace, TR_vecEndPos, origin)
+    
+    if(get_distance_f(origin, vecStart) <= KICK_RADIUS)
+    {
+        if(get_pdata_float(iPlayer, 83, 5) <= 0.0)
+        {
+            if(Check_Kick(iPlayer)) engfunc(EngFunc_EmitSound, iPlayer, CHAN_WEAPON, sounds[1], 1.0, ATTN_NORM, 0, PITCH_NORM)
+            else engfunc(EngFunc_EmitSound, iPlayer, CHAN_WEAPON, sounds[2], 1.0, ATTN_NORM, 0, PITCH_NORM)
+            set_pdata_float(iPlayer, 83, 1.0, 5)
+        }
+    }
+    else
+    {
+        static buttons
+        buttons = pev(iPlayer, pev_button)
+        buttons |= IN_ATTACK
+        set_pev(iPlayer, pev_button, buttons)
+    }
+}
+
+public fw_Weapon_PrimaryAttack(iEntity)
+{
+    if(pev(iEntity, pev_weapons) != WEAPON_ID)
+    return HAM_IGNORED
+    
+    new iPlayer = get_pdata_cbase(iEntity, 41, 4)
+    
+    if(!get_pdata_int(iEntity, 51, 4))
+    return HAM_SUPERCEDE
+
+    set_pdata_float(iEntity, 48, 0.8, 4)
+    set_pdata_int(iEntity, 51, get_pdata_int(iEntity, 51, 4)-1, 4)
+    
+    HookReloadBug[iPlayer] = 0
+    new Float:punchangle[3]
+    pev(iPlayer, pev_punchangle, punchangle)
+    new Float:recoil = get_pcvar_float(cvar_recoil)
+    punchangle[0] -= recoil
+    punchangle[1] += random_float(-recoil/2.0, recoil/2.0)
+    set_pev(iPlayer, pev_punchangle, punchangle)
+    screen_shake(iPlayer, floatmin(-punchangle[0]*3.0, 5.0), 0.2, 10.0)
+    engfunc(EngFunc_EmitSound, iPlayer, CHAN_WEAPON, sounds[0], 0.8, 0.4, 0, PITCH_NORM)
+    WeaponFire(iPlayer)
+    
+    if(get_pdata_int(iPlayer, 363, 5) < 90)
+    return HAM_SUPERCEDE
+    
+    SendWeaponAnim(iPlayer, 1)
+    
+    return HAM_SUPERCEDE
+}
+
+public fw_Weapon_SecondaryAttack(iEntity)
+{
+    if(pev(iEntity, pev_weapons) != WEAPON_ID)
+    return HAM_IGNORED
+    
+    new iPlayer = get_pdata_cbase(iEntity, 41, 4)
+    if(is_user_bot(iPlayer))
+    return HAM_SUPERCEDE
+    
+    if(get_pdata_float(iPlayer, 83, 5) > 0.0)
+    return HAM_SUPERCEDE
+    
+    if(Check_Kick(iPlayer)) engfunc(EngFunc_EmitSound, iPlayer, CHAN_WEAPON, sounds[1], 1.0, ATTN_NORM, 0, PITCH_NORM)
+    else engfunc(EngFunc_EmitSound, iPlayer, CHAN_WEAPON, sounds[2], 1.0, ATTN_NORM, 0, PITCH_NORM)
+    
+    set_pdata_float(iPlayer, 83, 1.0, 5)
+    SendWeaponAnim(iPlayer, 14)
+
+    return HAM_SUPERCEDE
+}
+
+public fw_Weapon_PostFrame(iEntity)
+{
+    if(pev(iEntity, pev_weapons) != WEAPON_ID)
+    return HAM_IGNORED
+    
+    new iPlayer = get_pdata_cbase(iEntity, 41, 4)
+    
+    if(HookReloadBug[iPlayer])
+    {
+        SendWeaponAnim(iPlayer, 0)
+        HookReloadBug[iPlayer] --
+    }
+    
+    if(!get_pdata_int(iEntity, 54, 4))
+    return HAM_IGNORED
+    
+    if(get_pdata_float(iPlayer, 83, 5) > 0.0)
+    return HAM_IGNORED
+    
+    new iAmmoType = get_pdata_int(iEntity, 49, 4)
+    new iAmmo = get_pdata_int(iPlayer, 376 + iAmmoType, 4)
+    new iClip = get_pdata_int(iEntity, 51, 4)
+    
+    new j = min(1 - iClip, iAmmo)
+    set_pdata_int(iEntity, 51, iClip + j)
+    set_pdata_int(iPlayer, 376 + iAmmoType, iAmmo - j, 4)
+    set_pdata_int(iEntity, 54, 0, 4)
+    
+    return HAM_SUPERCEDE
+}
+
+public fw_ItemDeploy_Post(iEntity)
+{
+    if(pev(iEntity, pev_weapons) != WEAPON_ID)
+    return
+    
+    new iPlayer = get_pdata_cbase(iEntity, 41, 4)
+    set_pdata_float(iPlayer, 83, get_pcvar_float(cvar_deploy), 5)
+}
+
+public fw_Weapon_Reload(iEntity)
+{
+    if(pev(iEntity, pev_weapons) != WEAPON_ID)
+    return HAM_IGNORED
+    
+    new iPlayer = get_pdata_cbase(iEntity, 41, 4)
+    new Clip = get_pdata_int(iEntity, 51, 4)
+    new ammo = get_pdata_int(iPlayer, 376 + get_pdata_int(iEntity, 49, 4), 4)
+    
+    if(!min(1 - Clip, ammo))
+    {
+        HookReloadBug[iPlayer] = 2
+        return HAM_SUPERCEDE
+    }
+
+    return HAM_IGNORED
+}
+
+public fw_Weapon_Reload_Post(iEntity)
+{
+    if(pev(iEntity, pev_weapons) != WEAPON_ID)
+    return
+    
+    new iPlayer = get_pdata_cbase(iEntity, 41, 4)
+    if(HookReloadBug[iPlayer]) SendWeaponAnim(iPlayer, 0)
+    
+    if(get_pdata_float(iPlayer, 83, 5) <= 0.0)
+    return
+    
+    set_pdata_float(iPlayer, 83, get_pcvar_float(cvar_reload), 5)
+    
+    if(!HookClipBug[iPlayer])
+    return
+    
+    set_pdata_int(iEntity, 51, HookClipBug[iPlayer], 4)
+    HookClipBug[iPlayer] = 0
+}
+
+public fw_Touch(iEntity, iPtd)
+{
+    if(!pev_valid(iEntity))
+    return HAM_IGNORED
+    
+    new classname[32]
+    pev(iEntity, pev_classname, classname, charsmax(classname))
+    if(strcmp(classname, "RpgGrenade"))
+    return HAM_IGNORED
+    
+    new Float:origin[3]
+    pev(iEntity, pev_origin, origin)
+
+    new iPlayer = pev(iEntity, pev_owner)
+    new i = -1
+    while((i = engfunc(EngFunc_FindEntityInSphere, i, origin, get_pcvar_float(cvar_range))) > 0)
+    {
+        if(!pev_valid(i) || iEntity == i)
+        continue
+    
+        if(pev(i, pev_takedamage) == DAMAGE_NO)
+        continue
+    
+        pev(i, pev_classname, classname, charsmax(classname))
+        if(!strcmp(classname, "func_breakable"))
+        {
+            dllfunc(DLLFunc_Use, i, iPlayer)
+            continue
+        }
+    
+        new Float:origin2[3]
+        pev(i, pev_origin, origin2)
+    
+        new Float:damage = floatclamp(get_pcvar_float(cvar_damage)*(1.0-(get_distance_f(origin2, origin)-21.0)/get_pcvar_float(cvar_range)), 0.0, get_pcvar_float(cvar_damage))
+        if(damage == 0.0)
+        continue
+    
+        if(i == iPtd)
+        {
+            new Float:velocity[3], Float:v_angle[3], Float:end[3]
+            pev(iEntity, pev_velocity, velocity)
+            engfunc(EngFunc_VecToAngles, velocity, v_angle)
+            v_angle[0] /= 3.0
+            engfunc(EngFunc_MakeVectors, v_angle)
+            global_get(glb_v_forward, v_angle)
+            xs_vec_mul_scalar(v_angle, 8192.0, end)
+            xs_vec_add(origin, end, end)
+            engfunc(EngFunc_TraceLine, origin, end, DONT_IGNORE_MONSTERS, iEntity, 0)
+            new HitGroup = get_tr2(0, TR_iHitgroup)
+            set_pdata_int(iPtd, 75, HitGroup, 4)
+            if(HitGroup == HIT_HEAD) damage *= 2.0
+            ExecuteHamB(Ham_TakeDamage, i, pev(iEntity, pev_iuser2), iPlayer, damage, DMG_GENERIC)
+            SpawnBlood(origin, 247, floatround(damage))
+            continue
+        }
+        ExecuteHamB(Ham_TakeDamage, i, pev(iEntity, pev_iuser2), iPlayer, damage, DMG_GENERIC)
+    }
+    return HAM_IGNORED
+}
+
+public fw_Touch_Post(iEntity, iPtd)
+{
+    if(!pev_valid(iEntity))
+    return
+    
+    new classname[32]
+    pev(iEntity, pev_classname, classname, charsmax(classname))
+    
+    if(strcmp(classname, "RpgGrenade"))
+    return
+    
+    new iPlayer = pev(iEntity, pev_owner)
+    new i = -1, Float:origin[3], Float:damage = get_pcvar_float(cvar_damage)/get_pcvar_float(cvar_range)
+    pev(iEntity, pev_origin, origin)
+    while((i = engfunc(EngFunc_FindEntityInSphere, i, origin, get_pcvar_float(cvar_range))) > 0)
+    {
+        if(!pev_valid(i) || iEntity == i || iPtd == i)
+        continue
+    
+        if(pev(i, pev_takedamage) == DAMAGE_NO)
+        continue
+    
+        pev(i, pev_classname, classname, charsmax(classname))
+        if(!strcmp(classname, "func_breakable"))
+        {
+            dllfunc(DLLFunc_Use, i, iPlayer)
+            continue
+        }
+    
+        ExecuteHamB(Ham_TakeDamage, i, pev(iEntity, pev_iuser3), iPlayer, damage, DMG_SHOCK)
+    }
+    
+    new Float:fCurTime
+    global_get(glb_time, fCurTime)
+    set_pev(iEntity, pev_nextthink, fCurTime)
+    
+    engfunc(EngFunc_MessageBegin, MSG_PVS, SVC_TEMPENTITY, origin, 0)
+    write_byte(TE_SPARKS)
+    engfunc(EngFunc_WriteCoord, origin[0])
+    engfunc(EngFunc_WriteCoord, origin[1])
+    engfunc(EngFunc_WriteCoord, origin[2])
+    message_end()
+    
+    engfunc(EngFunc_MessageBegin, MSG_PVS, SVC_TEMPENTITY, origin, 0)
+    write_byte(TE_ARMOR_RICOCHET)
+    engfunc(EngFunc_WriteCoord, origin[0])
+    engfunc(EngFunc_WriteCoord, origin[1])
+    engfunc(EngFunc_WriteCoord, origin[2])
+    write_byte(1)
+    message_end()
+    
+    engfunc(EngFunc_MessageBegin, MSG_ALL, SVC_TEMPENTITY, origin, 0)
+    write_byte(TE_EXPLOSION2)
+    engfunc(EngFunc_WriteCoord, origin[0])
+    engfunc(EngFunc_WriteCoord, origin[1])
+    engfunc(EngFunc_WriteCoord, origin[2]+50.0)
+    write_byte(1)
+    write_byte(100)
+    message_end()
+
+    engfunc(EngFunc_MessageBegin, MSG_ALL, SVC_TEMPENTITY, origin, 0)
+    write_byte(TE_WORLDDECAL)
+    engfunc(EngFunc_WriteCoord, origin[0])
+    engfunc(EngFunc_WriteCoord, origin[1])
+    engfunc(EngFunc_WriteCoord, origin[2])
+    write_byte(engfunc(EngFunc_DecalIndex, "{scorch1"))
+    message_end()
+
+    engfunc(EngFunc_MessageBegin, MSG_ALL, SVC_TEMPENTITY, origin, 0)
+    write_byte(TE_SPRITE)
+    engfunc(EngFunc_WriteCoord, origin[0])
+    engfunc(EngFunc_WriteCoord, origin[1])
+    engfunc(EngFunc_WriteCoord, origin[2]+70.0)
+    write_short(spr_light)
+    write_byte(60)
+    write_byte(0)
+    message_end()
+    
+    for(new i = 0; i < 10; i ++)
+    {
+        engfunc(EngFunc_MessageBegin, MSG_ALL, SVC_TEMPENTITY, origin, 0)
+        write_byte(TE_BREAKMODEL)
+        engfunc(EngFunc_WriteCoord, origin[0])
+        engfunc(EngFunc_WriteCoord, origin[1])
+        engfunc(EngFunc_WriteCoord, origin[2]+40.0)
+        engfunc(EngFunc_WriteCoord, 1.0)
+        engfunc(EngFunc_WriteCoord, 1.0)
+        engfunc(EngFunc_WriteCoord, 1.0)
+        engfunc(EngFunc_WriteCoord, random_float(-500.0,500.0))
+        engfunc(EngFunc_WriteCoord, random_float(-500.0,500.0))
+        engfunc(EngFunc_WriteCoord, random_float(-300.0,300.0))
+        write_byte(10)
+        write_short(mdl_break[random_num(0, sizeof mdl_break-1)])
+        write_byte(1)
+        write_byte(50)
+        write_byte(0x40)
+        message_end()
+    }
+    
+    engfunc(EngFunc_RemoveEntity, iEntity)
+}
+
+public fw_Think(iEntity)
+{
+    if(!pev_valid(iEntity))
+    return HAM_IGNORED
+    
+    new classname[32]
+    pev(iEntity, pev_classname, classname, charsmax(classname))
+    
+    if(strcmp(classname, "RpgGrenade"))
+    return HAM_IGNORED
+    
+    set_pev(iEntity, pev_movetype, MOVETYPE_FLY)
+    set_pev(iEntity, pev_nextthink, get_gametime()+0.01)
+    new Float:fOrigin[3]
+    pev(iEntity, pev_origin, fOrigin)
+    new num = random_num(0,1)
+    message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+    write_byte(TE_SMOKE)
+    engfunc(EngFunc_WriteCoord, fOrigin[0])
+    engfunc(EngFunc_WriteCoord, fOrigin[1])
+    engfunc(EngFunc_WriteCoord, fOrigin[2]-20.0)
+    if(num) write_short(spr_smoke1)
+    else write_short(spr_smoke2)
+    write_byte(random_num(8,10))
+    write_byte(random_num(8,10))
+    message_end()
+    
+    new Float:fVelocity[3], Float:fAngle[3]
+    pev(iEntity, pev_velocity, fVelocity)
+    vector_to_angle(fVelocity,fAngle)
+    set_pev(iEntity, pev_angles, fAngle)
+    
+    return HAM_IGNORED
+}
+
+public WeaponFire(iPlayer)
+{
+    new Float:origin[3], Float:angle[3], Float:v_angle[3], Float:velocity[3]
+    get_aim_origin_vector(iPlayer, 8.0, 0.0, 0.0, origin)
+    pev(iPlayer, pev_angles, angle)
+    pev(iPlayer, pev_v_angle, v_angle)
+    pev(iPlayer, pev_velocity, velocity)
+    new Float:Value = vector_length(velocity)/100.0
+    v_angle[0] += random_float(-Value, Value)
+    v_angle[1] += random_float(-Value, Value)
+    engfunc(EngFunc_MakeVectors, v_angle)
+    global_get(glb_v_forward, v_angle)
+    xs_vec_mul_scalar(v_angle, 8120.0, v_angle)
+    xs_vec_add(origin, v_angle, v_angle)
+    engfunc(EngFunc_TraceLine, origin, v_angle, DONT_IGNORE_MONSTERS, iPlayer, 0)
+    get_tr2(0, TR_vecEndPos, v_angle)
+    if(get_pdata_int(iPlayer, 363, 5) >= 90) get_aim_origin_vector(iPlayer, 8.0, 7.0, -6.0, origin)
+    new iEntity = engfunc(EngFunc_CreateNamedEntity, engfunc(EngFunc_AllocString, "info_target"))
+    set_pev(iEntity, pev_classname, "RpgGrenade")
+    set_pev(iEntity, pev_nextthink, get_gametime()+0.1)
+    set_pev(iEntity, pev_solid, SOLID_BBOX)
+    set_pev(iEntity, pev_angles, angle)
+    set_pev(iEntity, pev_movetype, MOVETYPE_FLY)
+    set_pev(iEntity, pev_iuser3, get_pdata_cbase(iPlayer, 373))
+    set_pev(iEntity, pev_owner, iPlayer)
+
+    engfunc(EngFunc_SetSize, iEntity, {-0.1, -0.1, -0.1}, {0.1, 0.1, 0.1})
+    engfunc(EngFunc_SetModel, iEntity, models[3])
+    engfunc(EngFunc_SetOrigin, iEntity, origin)
+    
+    get_speed_vector(origin, v_angle, 1000.0, velocity)
+    set_pev(iEntity, pev_velocity, velocity)
+}
+
+public Check_Kick(iPlayer)
+{
+    static Float:Point[4][3], Float:TB_Distance
+
+    TB_Distance = KICK_RADIUS / 4.0
+
+    static Float:fVicOrigin[3], Float:fOrigin[3]
+    pev(iPlayer, pev_origin, fOrigin)
+
+    for(new i = 0; i < 4; i++) get_aim_origin_vector(iPlayer, TB_Distance * (i + 1), 0.0, 0.0, Point[i])
+
+    static Have_Victim; Have_Victim = 0
+
+    for(new i = 0; i < get_maxplayers(); i++)
+    {
+        if(!is_user_alive(i) || iPlayer == i)
+        continue
+        
+        pev(i, pev_origin, fVicOrigin)
+        if(get_distance_f(fOrigin, fVicOrigin) > KICK_RADIUS || is_wall_between_points(fOrigin, fVicOrigin, iPlayer))
+        continue
+
+        if(get_distance_f(fVicOrigin, Point[0]) <= KICK_POINT_DIS || get_distance_f(fVicOrigin, Point[1]) <= KICK_POINT_DIS || get_distance_f(fVicOrigin, Point[2]) <= KICK_POINT_DIS || get_distance_f(fVicOrigin, Point[3]) <= KICK_POINT_DIS)
+        {
+            if(!Have_Victim) Have_Victim = 1
+            Do_Kick(iPlayer, i, KICK_DAMAGE)
+        }
+    }
+    
+    if(Have_Victim) return 1
+    else return 0
+    
+    return 0
+}
+
+public Do_Kick(iAttacker, iVictim, Float:fDamage)
+{
+    // get fDirection
+    new Float:fAngles[3], Float:fDirection[3]
+    pev(iAttacker, pev_angles, fAngles)
+    angle_vector(fAngles, ANGLEVECTOR_FORWARD, fDirection)
+    
+    // get fStart
+    new Float:fStart[3], Float:fViewOfs[3]
+    pev(iAttacker, pev_origin, fStart)
+    pev(iAttacker, pev_view_ofs, fViewOfs)
+    xs_vec_add(fViewOfs, fStart, fStart)
+    
+    // get aimOrigin
+    new iAimOrigin[3], Float:fAimOrigin[3]
+    get_user_origin(iAttacker, iAimOrigin, 3)
+    IVecFVec(iAimOrigin, fAimOrigin)
+    
+    // TraceLine from fStart to AimOrigin
+    new ptr = create_tr2() 
+    engfunc(EngFunc_TraceLine, fStart, fAimOrigin, DONT_IGNORE_MONSTERS, iAttacker, ptr)
+    new pHit = get_tr2(ptr, TR_pHit)
+    new iHitgroup = get_tr2(ptr, TR_iHitgroup)
+    new Float:fEndPos[3]
+    get_tr2(ptr, TR_vecEndPos, fEndPos)
+
+    // get target & body at aiming
+    new iTarget, iBody
+    get_user_aiming(iAttacker, iTarget, iBody)
+    
+    // if aiming find target is iVictim then update iHitgroup
+    if(iTarget == iVictim) iHitgroup = iBody
+
+    // if ptr find target not is iVictim
+    else if(pHit != iVictim)
+    {
+        // get AimOrigin in iVictim
+        new Float:fVicOrigin[3], Float:fVicViewOfs[3], Float:fAimInVictim[3]
+        pev(iVictim, pev_origin, fVicOrigin)
+        pev(iVictim, pev_view_ofs, fVicViewOfs) 
+        xs_vec_add(fVicViewOfs, fVicOrigin, fAimInVictim)
+        fAimInVictim[2] = fStart[2]
+        fAimInVictim[2] += get_distance_f(fStart, fAimInVictim) * floattan( fAngles[0] * 2.0, degrees )
+        
+        // check aim in size of iVictim
+        new iAngleToVictim = get_angle_to_target(iAttacker, fVicOrigin)
+        iAngleToVictim = abs(iAngleToVictim)
+        new Float:fDis = 2.0 * get_distance_f(fStart, fAimInVictim) * floatsin( float(iAngleToVictim) * 0.5, degrees )
+        new Float:fVicSize[3]
+        pev(iVictim, pev_size , fVicSize)
+        if(fDis <= fVicSize[0] * 0.5)
+        {
+            // TraceLine from fStart to aimOrigin in iVictim
+            new ptr2 = create_tr2() 
+            engfunc(EngFunc_TraceLine, fStart, fAimInVictim, DONT_IGNORE_MONSTERS, iAttacker, ptr2)
+            new pHit2 = get_tr2(ptr2, TR_pHit)
+            new iHitgroup2 = get_tr2(ptr2, TR_iHitgroup)
+            
+            // if ptr2 find target is iVictim
+            if(pHit2 == iVictim && (iHitgroup2 != HIT_HEAD || fDis <= fVicSize[0] * 0.25))
+            {
+                pHit = iVictim
+                iHitgroup = iHitgroup2
+                get_tr2(ptr2, TR_vecEndPos, fEndPos)
+            }
+            
+            free_tr2(ptr2)
+        }
+        
+        // if pHit still not is iVictim then set default HitGroup
+        if(pHit != iVictim)
+        {
+            // set default iHitgroup
+            iHitgroup = HIT_GENERIC
+            
+            new ptr3 = create_tr2() 
+            engfunc(EngFunc_TraceLine, fStart, fVicOrigin, DONT_IGNORE_MONSTERS, iAttacker, ptr3)
+            get_tr2(ptr3, TR_vecEndPos, fEndPos)
+            
+            // free ptr3
+            free_tr2(ptr3)
+        }
+    }
+    
+    // set new Hit & Hitgroup & EndPos
+    set_tr2(ptr, TR_pHit, iVictim)
+    set_tr2(ptr, TR_iHitgroup, iHitgroup)
+    set_tr2(ptr, TR_vecEndPos, fEndPos)
+    
+    // hitgroup multi fDamage
+    new Float:fMultifDamage 
+    switch(iHitgroup)
+    {
+        case HIT_HEAD: fMultifDamage  = 4.0
+        case HIT_STOMACH: fMultifDamage  = 1.25
+        case HIT_LEFTLEG: fMultifDamage  = 0.75
+        case HIT_RIGHTLEG: fMultifDamage  = 0.75
+        default: fMultifDamage  = 1.0
+    }
+    
+    fDamage *= fMultifDamage
+
+    // Kick
+    new Float:fVelocity[3]
+    for(new i = 0; i < 3; i++) fVelocity[i] = (fEndPos[i] - fStart[i]) / get_distance_f(fStart, fEndPos) * KICK_VELOCITY
+    set_pev(iVictim, pev_velocity, fVelocity)
+    
+    // TakeDamage
+    ExecuteHamB(Ham_TakeDamage, iVictim, 0, iAttacker, fDamage, (DMG_NEVERGIB | DMG_BULLET))
+    
+    // free ptr
+    free_tr2(ptr)
+}
+
+stock SendWeaponAnim(iPlayer, iAnim)
+{
+    set_pev(iPlayer, pev_weaponanim, iAnim)
+    message_begin(MSG_ONE, SVC_WEAPONANIM, {0, 0, 0}, iPlayer)
+    write_byte(iAnim)
+    write_byte(pev(iPlayer, pev_body))
+    message_end()
+}
+
+stock screen_shake(iPlayer, Float:amplitude, Float:duration, Float:frequency)
+{
+    message_begin(MSG_ONE, get_user_msgid("ScreenShake"), _, iPlayer)
+    write_short(floatround(4096.0*amplitude))
+    write_short(floatround(4096.0*duration))
+    write_short(floatround(4096.0*frequency))
+    message_end()
+}
+
+stock get_aim_origin_vector(iPlayer, Float:forw, Float:right, Float:up, Float:vStart[])
+{
+    new Float:vOrigin[3], Float:vAngle[3], Float:vForward[3], Float:vRight[3], Float:vUp[3]
+    
+    pev(iPlayer, pev_origin, vOrigin)
+    pev(iPlayer, pev_view_ofs, vUp)
+    xs_vec_add(vOrigin, vUp, vOrigin)
+    pev(iPlayer, pev_v_angle, vAngle)
+    
+    angle_vector(vAngle, ANGLEVECTOR_FORWARD, vForward)
+    angle_vector(vAngle, ANGLEVECTOR_RIGHT, vRight)
+    angle_vector(vAngle, ANGLEVECTOR_UP, vUp)
+    
+    vStart[0] = vOrigin[0] + vForward[0] * forw + vRight[0] * right + vUp[0] * up
+    vStart[1] = vOrigin[1] + vForward[1] * forw + vRight[1] * right + vUp[1] * up
+    vStart[2] = vOrigin[2] + vForward[2] * forw + vRight[2] * right + vUp[2] * up
+}
+
+stock get_speed_vector(const Float:origin1[3], const Float:origin2[3], Float:speed, Float:new_velocity[3])
+{
+    xs_vec_sub(origin2, origin1, new_velocity)
+    new Float:num = floatsqroot(speed*speed / (new_velocity[0]*new_velocity[0] + new_velocity[1]*new_velocity[1] + new_velocity[2]*new_velocity[2]))
+    xs_vec_mul_scalar(new_velocity, num, new_velocity)
+}
+
+stock SpawnBlood(const Float:vecOrigin[3], iColor, iAmount)
+{
+    if(iAmount == 0)
+    return
+    iAmount *= 2
+    if(iAmount > 255) iAmount = 255
+    engfunc(EngFunc_MessageBegin, MSG_PVS, SVC_TEMPENTITY, vecOrigin)
+    write_byte(TE_BLOODSPRITE)
+    engfunc(EngFunc_WriteCoord, vecOrigin[0])
+    engfunc(EngFunc_WriteCoord, vecOrigin[1])
+    engfunc(EngFunc_WriteCoord, vecOrigin[2])
+    write_short(spr_blood_spray)
+    write_short(spr_blood_drop)
+    write_byte(iColor)
+    write_byte(min(max(3, iAmount / 10), 16))
+    message_end()
+}
+
+stock DropWeapons(iPlayer, Slot)
+{
+    new item = get_pdata_cbase(iPlayer, 367+Slot, 4)
+    while(item > 0)
+    {
+        static classname[24]
+        pev(item, pev_classname, classname, charsmax(classname))
+        engclient_cmd(iPlayer, "drop", classname)
+        item = get_pdata_cbase(item, 42, 5)
+    }
+    set_pdata_cbase(iPlayer, 367, -1, 4)
+}
+
+stock fm_give_item(iPlayer, const wEntity[])
+{
+    new iEntity = engfunc(EngFunc_CreateNamedEntity, engfunc(EngFunc_AllocString, wEntity))
+    new Float:origin[3]
+    pev(iPlayer, pev_origin, origin)
+    set_pev(iEntity, pev_origin, origin)
+    set_pev(iEntity, pev_spawnflags, pev(iEntity, pev_spawnflags) | SF_NORESPAWN)
+    dllfunc(DLLFunc_Spawn, iEntity)
+    new save = pev(iEntity, pev_solid)
+    dllfunc(DLLFunc_Touch, iEntity, iPlayer)
+    if(pev(iEntity, pev_solid) != save)
+    return iEntity
+    engfunc(EngFunc_RemoveEntity, iEntity)
+    return -1
+}
+
+stock is_wall_between_points(Float:start[3], Float:end[3], ignore_ent)
+{
+    static ptr
+    ptr = create_tr2()
+
+    engfunc(EngFunc_TraceLine, start, end, IGNORE_MONSTERS, ignore_ent, ptr)
+    
+    static Float:EndPos[3]
+    get_tr2(ptr, TR_vecEndPos, EndPos)
+
+    free_tr2(ptr)
+    return floatround(get_distance_f(end, EndPos))
+}
+
+stock get_angle_to_target(iPlayer, const Float:fTarget[3], Float:TargetSize = 0.0)
+{
+    new Float:fOrigin[3], iAimOrigin[3], Float:fAimOrigin[3], Float:fV1[3]
+    pev(iPlayer, pev_origin, fOrigin)
+    get_user_origin(iPlayer, iAimOrigin, 3) // end position from eyes
+    IVecFVec(iAimOrigin, fAimOrigin)
+    xs_vec_sub(fAimOrigin, fOrigin, fV1)
+    
+    new Float:fV2[3]
+    xs_vec_sub(fTarget, fOrigin, fV2)
+    
+    new iResult = get_angle_between_vectors(fV1, fV2)
+    
+    if (TargetSize > 0.0)
+    {
+        new Float:fTan = TargetSize / get_distance_f(fOrigin, fTarget)
+        new fAngleToTargetSize = floatround( floatatan(fTan, degrees) )
+        iResult -= (iResult > 0) ? fAngleToTargetSize : -fAngleToTargetSize
+    }
+    
+    return iResult
+}
+
+stock get_angle_between_vectors(const Float:fV1[3], const Float:fV2[3])
+{
+    new Float:fA1[3], Float:fA2[3]
+    engfunc(EngFunc_VecToAngles, fV1, fA1)
+    engfunc(EngFunc_VecToAngles, fV2, fA2)
+    
+    new iResult = floatround(fA1[1] - fA2[1])
+    iResult = iResult % 360
+    iResult = (iResult > 180) ? (iResult - 360) : iResult
+    
+    return iResult
+}

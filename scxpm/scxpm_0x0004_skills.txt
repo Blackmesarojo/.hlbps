@@ -1,87 +1,67 @@
-// scxpm_0x0004_skills.sma
-// Sistema de habilidades y menús
+#if defined _scxpm_skills_included
+    #endinput
+#endif
+#define _scxpm_skills_included
 
-#define MENU_KEYS (1<<0|1<<1|1<<2|1<<3|1<<4|1<<5|1<<6|1<<7|1<<8|1<<9)
+// Definiciones de habilidades
+#define SKILL_HEALTH 1
+#define SKILL_ARMOR 2
+#define SKILL_REGEN_HP 3
+#define SKILL_REGEN_AP 4
+#define SKILL_DISTANCE 5
+#define MAX_SKILLS 5
 
-SCXPM_Skills_Init() {
-    register_clcmd("say /skills", "SCXPM_SkillsMenu");
-    register_clcmd("say /habilidades", "SCXPM_SkillsMenu");
+// Variables locales del módulo
+new g_iPlayerSkills[33][MAX_SKILLS + 1];
+
+public SCXPM_Skills_Init()
+{
+    register_cvar("scxpm_skill_maxlevel", "50");
+    return PLUGIN_CONTINUE;
 }
 
-public SCXPM_SkillsMenu(id) {
-    if(!is_user_connected(id) || !loaddata[id]) {
+public SCXPM_GiveSkill(id, skill)
+{
+    if(!is_user_connected(id) || !g_bLoaded[id])
         return PLUGIN_HANDLED;
-    }
-    
-    static menu[512], len;
-    len = formatex(menu, 511, "\yMenu de Habilidades^n\wPuntos disponibles: %d^n^n", skillpoints[id]);
-    
-    len += formatex(menu[len], 511-len, "\r1. \wVida Extra \y[Nivel: %d]^n", health[id]);
-    len += formatex(menu[len], 511-len, "\r2. \wArmadura Extra \y[Nivel: %d]^n", armor[id]);
-    len += formatex(menu[len], 511-len, "\r3. \wRegeneracion de Vida \y[Nivel: %d]^n", rhealth[id]);
-    len += formatex(menu[len], 511-len, "\r4. \wRegeneracion de Armadura \y[Nivel: %d]^n", rarmor[id]);
-    len += formatex(menu[len], 511-len, "\r5. \wDistancia de Daño \y[Nivel: %d]^n^n", dist[id]);
-    
-    len += formatex(menu[len], 511-len, "\r0. \wSalir");
-    
-    show_menu(id, MENU_KEYS, menu, -1, "Skills Menu");
-    return PLUGIN_HANDLED;
-}
-
-public SCXPM_SkillsMenuHandler(id, key) {
-    if(!is_user_connected(id) || !loaddata[id] || !skillpoints[id]) {
+        
+    if(skill < 1 || skill > MAX_SKILLS)
         return PLUGIN_HANDLED;
-    }
+        
+    if(g_iSkillPoints[id] < 1)
+        return PLUGIN_HANDLED;
+        
+    new max_level = get_cvar_num("scxpm_skill_maxlevel");
+    if(g_iPlayerSkills[id][skill] >= max_level)
+        return PLUGIN_HANDLED;
+        
+    g_iPlayerSkills[id][skill]++;
+    g_iSkillPoints[id]--;
     
-    switch(key) {
-        case 0: { // Vida Extra
-            health[id]++;
-            skillpoints[id]--;
-            client_print(id, print_chat, "[SCXPM] Aumentaste tu Vida Extra al nivel %d", health[id]);
-        }
-        case 1: { // Armadura Extra
-            armor[id]++;
-            skillpoints[id]--;
-            client_print(id, print_chat, "[SCXPM] Aumentaste tu Armadura Extra al nivel %d", armor[id]);
-        }
-        case 2: { // Regeneración de Vida
-            rhealth[id]++;
-            skillpoints[id]--;
-            client_print(id, print_chat, "[SCXPM] Aumentaste tu Regeneracion de Vida al nivel %d", rhealth[id]);
-        }
-        case 3: { // Regeneración de Armadura
-            rarmor[id]++;
-            skillpoints[id]--;
-            client_print(id, print_chat, "[SCXPM] Aumentaste tu Regeneracion de Armadura al nivel %d", rarmor[id]);
-        }
-        case 4: { // Distancia de Daño
-            dist[id]++;
-            skillpoints[id]--;
-            client_print(id, print_chat, "[SCXPM] Aumentaste tu Distancia de Daño al nivel %d", dist[id]);
-        }
-        case 9: { // Salir
-            return PLUGIN_HANDLED;
-        }
-    }
+    SCXPM_ApplySkills(id);
     
-    // Mostrar menú de nuevo si aún hay puntos
-    if(skillpoints[id] > 0) {
-        SCXPM_SkillsMenu(id);
-    }
-    
-    return PLUGIN_HANDLED;
+    return PLUGIN_CONTINUE;
 }
 
-public SCXPM_ApplyPlayerSkills(id) {
-    if(!is_user_alive(id) || !loaddata[id]) {
-        return;
-    }
-    
-    // Aplicar vida extra
-    new maxhealth = 100 + (health[id] * 2);
-    set_user_health(id, maxhealth);
+public SCXPM_ApplySkills(id)
+{
+    if(!is_user_connected(id) || !g_bLoaded[id])
+        return PLUGIN_HANDLED;
+        
+    // Aplicar salud extra
+    new health_bonus = g_iPlayerSkills[id][SKILL_HEALTH] * 2;
+    set_user_health(id, get_user_health(id) + health_bonus);
     
     // Aplicar armadura extra
-    new maxarmor = 100 + (armor[id] * 2);
-    set_user_armor(id, maxarmor);
+    new armor_bonus = g_iPlayerSkills[id][SKILL_ARMOR] * 2;
+    set_user_armor(id, get_user_armor(id) + armor_bonus);
+    
+    // Aplicar regeneración
+    g_iRegenHealth[id] = g_iPlayerSkills[id][SKILL_REGEN_HP];
+    g_iRegenArmor[id] = g_iPlayerSkills[id][SKILL_REGEN_AP];
+    
+    // Aplicar distancia
+    g_iDistance[id] = g_iPlayerSkills[id][SKILL_DISTANCE];
+    
+    return PLUGIN_CONTINUE;
 }
